@@ -11,7 +11,50 @@ import (
 	"github.com/RCX1t7/plexus/internal/harness"
 )
 
-func TestMain(m *testing.M) { fakes.MaybeRun(); os.Exit(m.Run()) }
+func TestMain(m *testing.M) {
+	fakes.MaybeRun()
+	// The plugin is bundled, so every StartSession installs the profile into
+	// DSH_HOME. Point it at a scratch dir to keep the real ~/.dsh untouched.
+	dir, _ := os.MkdirTemp("", "dsh-home-")
+	os.Setenv("DSH_HOME", dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// TestGateAndGuestOverTheFake drives the dangerous-action gate and the guest
+// lock through the DSH fake (internal/fakes, mode dsh).
+func TestGateAndGuestOverTheFake(t *testing.T) {
+	o := fakes.Options(t, "dsh")
+	o.HostTools = []harness.ToolSpec{{Name: "plexus_post"}}
+	s, err := Adapter{}.StartSession(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// A side-effecting call is forwarded for a decision; a parked deny carries a reason.
+	parked := fakes.Driver{Decide: func(harness.PermissionRequest) harness.Decision {
+		return harness.Decision{Allow: false, Reason: "已暂挂，等 Sin 批准"}
+	}}
+	if fin, _ := parked.Turn(t, s, "PERM git push --force origin main", harness.LevelFull); fin.Text != "gate:false:已暂挂，等 Sin 批准" {
+		t.Fatalf("gate parked: %q", fin.Text)
+	}
+	// The classifier gets the typed command through the event.
+	var gotCmd string
+	seen := fakes.Driver{Decide: func(pr harness.PermissionRequest) harness.Decision {
+		gotCmd = pr.Tool.Command
+		return harness.Decision{Allow: true}
+	}}
+	if fin, _ := seen.Turn(t, s, "PERM git -C sub push -f", harness.LevelFull); fin.Text != "gate:true:" || gotCmd != "git -C sub push -f" {
+		t.Fatalf("gate allow: %q cmd=%q", fin.Text, gotCmd)
+	}
+	// A stranger's (guest) turn: a non-read native tool is denied natively, never asked.
+	asked := false
+	guard := fakes.Driver{Decide: func(harness.PermissionRequest) harness.Decision { asked = true; return harness.Decision{Allow: true} }}
+	if fin, _ := guard.Turn(t, s, "TOOL write /etc/passwd", harness.LevelChat); fin.Text != "guest-denied:write" || asked {
+		t.Fatalf("guest lock: %q asked=%v", fin.Text, asked)
+	}
+}
 
 func TestBridgeTurnPermissionHostToolSteer(t *testing.T) {
 	o := fakes.Options(t, "dsh")
