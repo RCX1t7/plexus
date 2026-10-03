@@ -99,9 +99,12 @@ const overlay = `# Plexus-owned overlay for "dsh --profile plexus" (written by p
       workspace-write:
         sandbox: workspace-write
         approval: ask
+      # Even the full-access preset asks (CR-10): no preset may auto-approve.
+      # The sandbox can still be widened for a turn, but every non-read call is
+      # gated by the bridge + the single Go classifier regardless of preset.
       danger-full-access:
         sandbox: danger-full-access
-        approval: never
+        approval: ask
 
 # Privacy (CR-10): nothing about a Plexus turn leaves the machine by default.
 # Re-enable any of these in your own cordis.patch.yml if you want them.
