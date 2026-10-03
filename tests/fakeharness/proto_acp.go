@@ -88,12 +88,14 @@ func (d *acpDriver) update(u map[string]any) {
 func (d *acpDriver) turn(text string, cancel <-chan struct{}, reply func(any, *RPCError)) {
 	final, err := d.b.Turn(&acpIO{d: d, cancel: cancel}, text)
 	if err != nil {
+		d.r.freeSlot()
 		reply(map[string]any{"stopReason": "cancelled"}, nil)
 		return
 	}
 	if final != "" {
 		d.update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": final}})
 	}
+	d.r.freeSlot()
 	reply(map[string]any{"stopReason": "end_turn"}, nil)
 }
 

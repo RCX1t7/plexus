@@ -30,7 +30,7 @@ jobs:
       - name: direct-dependency budget
         run: go test ./tests/deps/ -run TestDirectDependencyBudget -count=1 -v
       - name: go test -race
-        run: go test -race ./...
+        run: go test -race -p 1 ./...
         env:
           PLEXUS_INSECURE_DEV_SECRETS: '1'
 

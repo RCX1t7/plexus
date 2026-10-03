@@ -17,7 +17,7 @@ import (
 const workdir = "/work/repo"
 
 func ctx(goos string, pushed bool) danger.Ctx {
-	return danger.Ctx{GOOS: goos, Workdir: workdir, HeadPushed: func() bool { return pushed }}
+	return danger.Ctx{GOOS: goos, Workdir: workdir, HeadPushed: func(string) bool { return pushed }}
 }
 
 type vec struct {
@@ -35,6 +35,12 @@ func wr(paths ...string) danger.Call {
 }
 func mcp(name string, paths ...string) danger.Call {
 	return danger.Call{Kind: harness.ToolOther, Name: name, Paths: paths}
+}
+func del(paths ...string) danger.Call {
+	return danger.Call{Kind: harness.ToolWrite, Deletes: paths}
+}
+func mcpDel(name string, paths ...string) danger.Call {
+	return danger.Call{Kind: harness.ToolOther, Name: name, Deletes: paths}
 }
 
 func TestGateVectors(t *testing.T) {
@@ -67,43 +73,43 @@ func TestGateVectors(t *testing.T) {
 		// Codex fileChange / applyPatch and MCP delete tools arrive as write/other
 		// calls with Paths; a path OUTSIDE the workdir must gate even if it is not
 		// a system dir. Skeleton only checks systemDir for ToolWrite Paths.
-		{name: "write outside workdir via Paths (applyPatch)", call: wr("/home/sin/.bashrc"), ctx: lin,
-			wantGate: true, wantRule: "fs.delete_outside", bug: "ToolWrite Paths outside workdir are not gated (only systemDir checked)"},
-		{name: "*** Delete File outside (patch)", call: wr("/home/sin/.ssh/authorized_keys"), ctx: lin,
-			wantGate: true, bug: "delete-via-Paths outside workdir not gated"},
-		{name: "MCP delete tool outside workdir", call: mcp("filesystem_delete_file", "/home/sin/data.db"), ctx: lin,
-			wantGate: true, bug: "MCP tool with outside Paths not gated (only name-based send match)"},
+		{name: "applyPatch delete outside workdir", call: del("/home/sin/.bashrc"), ctx: lin,
+			wantGate: true, wantRule: "fs.delete_outside"},
+		{name: "*** Delete File outside (patch)", call: del("/home/sin/.ssh/authorized_keys"), ctx: lin,
+			wantGate: true, wantRule: "fs.delete_outside"},
+		{name: "MCP delete tool outside workdir", call: mcpDel("filesystem_delete_file", "/home/sin/data.db"), ctx: lin,
+			wantGate: true, wantRule: "fs.delete_outside"},
 
 		// ---- shell obfuscation / wrappers ----
-		{name: "cd / && rm relative", call: sh("cd /home/sin && rm -rf project"), ctx: lin,
-			wantGate: true, bug: "gate cannot track cd; relative path resolved against workdir, not cwd"},
+		{name: "cd elsewhere && rm relative", call: sh("cd /home/sin && rm -rf project"), ctx: lin,
+			wantGate: true, wantRule: "fs.delete_outside"},
 		{name: "subshell (git push -f)", call: sh("(git push -f)"), ctx: lin,
-			wantGate: true, bug: "subshell parens not unwrapped; exe parsed as '(git'"},
+			wantGate: true},
 		{name: "command substitution $(...)", call: sh("eval $(echo git push --force)"), ctx: lin,
 			wantGate: true, bug: "command substitution not expanded (documented gap)"},
 		{name: "npx rimraf outside", call: sh("npx rimraf /home/sin/x"), ctx: lin,
-			wantGate: true, bug: "npx wrapper hides rimraf; exe parsed as npx"},
+			wantGate: true},
 
 		// ---- windows system / installer ----
 		{name: "regedit /s", call: sh("regedit /s evil.reg"), ctx: win,
-			wantGate: true, wantRule: "sys.registry", bug: "regedit not in rule set (only reg.exe)"},
+			wantGate: true, wantRule: "sys.registry"},
 		{name: "reg add", call: sh("reg add HKLM\\Software\\X /v Y /d Z"), ctx: win, wantGate: true, wantRule: "sys.registry"},
 		{name: "Add-AppxPackage", call: sh("Add-AppxPackage evil.msix"), ctx: win,
-			wantGate: true, wantRule: "sys.installer", bug: "Add-AppxPackage not in rule set"},
+			wantGate: true, wantRule: "sys.installer"},
 		{name: "FooInstaller.exe suffix", call: sh("C:\\Temp\\FooInstaller.exe /S"), ctx: win,
-			wantGate: true, wantRule: "sys.installer", bug: "*Installer.exe suffix not caught (only prefix install* / setup)"},
+			wantGate: true, wantRule: "sys.installer"},
 		{name: "installer.exe prefix", call: sh("installer.exe /quiet"), ctx: win, wantGate: true, wantRule: "sys.installer"},
 		{name: "msiexec", call: sh("msiexec /i pkg.msi"), ctx: win, wantGate: true, wantRule: "sys.installer"},
 
 		// ---- shell write into system dir (redirection / cp) ----
 		{name: "cp into system dir", call: sh("cp payload /usr/bin/x"), ctx: lin,
-			wantGate: true, bug: "cp into system dir not gated (cp not in rule set; redirection invisible)"},
+			wantGate: true},
 		{name: "shell redirect into system dir", call: sh("echo x > /etc/cron.d/evil"), ctx: lin,
-			wantGate: true, bug: "shell redirection target not parsed as a write path"},
+			wantGate: true},
 
 		// ---- outbound message via curl to Slack web API ----
 		{name: "curl chat.postMessage", call: sh("curl -XPOST https://slack.com/api/chat.postMessage -d text=hi"), ctx: lin,
-			wantGate: true, wantRule: "out.webhook", bug: "slack.com web API not matched by webhookHosts (only hooks.slack.com)"},
+			wantGate: true, wantRule: "out.api"},
 		{name: "curl to slack incoming webhook", call: sh("curl -XPOST https://hooks.slack.com/services/XXX -d p=1"), ctx: lin,
 			wantGate: true, wantRule: "out.webhook"},
 

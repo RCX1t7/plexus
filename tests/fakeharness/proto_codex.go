@@ -156,6 +156,7 @@ func (d *codexDriver) turn(turn, text string, cancel <-chan struct{}) {
 		d.p.notify("item/completed", map[string]any{"threadId": tid, "turnId": turn,
 			"item": map[string]any{"type": "agentMessage", "id": item, "text": final, "phase": "final_answer"}})
 	}
+	d.r.freeSlot()
 	d.p.notify("turn/completed", map[string]any{"threadId": tid, "turn": map[string]any{"id": turn, "status": status, "items": []any{}, "error": nil}})
 }
 

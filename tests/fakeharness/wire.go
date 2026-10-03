@@ -237,7 +237,9 @@ type turnRunner struct {
 	b      *Brain
 	mu     sync.Mutex
 	cancel chan struct{}
-	done   chan struct{}
+	done   chan struct{} // closed when the turn goroutine fully exits
+	freed  chan struct{} // closed when the slot is free for the next turn
+	free   func()        // releases the current slot (idempotent)
 	gone   chan struct{} // closed when stdin ends
 }
 
@@ -247,18 +249,39 @@ func newRunner(b *Brain) *turnRunner { return &turnRunner{b: b, gone: make(chan 
 func (r *turnRunner) start(fn func(cancel <-chan struct{})) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.done != nil {
+	if r.freed != nil {
 		select {
-		case <-r.done:
+		case <-r.freed:
 		default:
 			return false
 		}
 	}
 	r.cancel = make(chan struct{})
 	r.done = make(chan struct{})
-	c, d := r.cancel, r.done
-	go func() { defer close(d); fn(c) }()
+	r.freed = make(chan struct{})
+	c, d, fr := r.cancel, r.done, r.freed
+	var once sync.Once
+	free := func() { once.Do(func() { close(fr) }) }
+	r.free = free
+	go func() {
+		defer close(d)
+		defer free()
+		fn(c)
+	}()
 	return true
+}
+
+// freeSlot lets a driver release the turn slot right before it emits its
+// terminal notification, so the host can start the next turn without racing
+// the goroutine's deferred close. Idempotent; the deferred free is a no-op
+// after it. The done channel still marks the goroutine's true exit.
+func (r *turnRunner) freeSlot() {
+	r.mu.Lock()
+	f := r.free
+	r.mu.Unlock()
+	if f != nil {
+		f()
+	}
 }
 
 // interrupt cancels the running turn (idempotent). A stubborn harness ignores it.

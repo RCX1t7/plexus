@@ -244,7 +244,7 @@ func (s *Session) control(req map[string]any, timeout time.Duration) (map[string
 // ------------------------------------------------------------------ handshake
 
 func (s *Session) handshake(o Options) error {
-	const t = 15 * time.Second
+	const t = 60 * time.Second
 	switch s.proto {
 	case Claude:
 		init := map[string]any{"subtype": "initialize", "hooks": map[string]any{
@@ -347,7 +347,7 @@ func (s *Session) Prompt(text, level string) (string, error) {
 			return "", err
 		}
 	case Codex:
-		res, err := s.rpc("turn/start", map[string]any{"threadId": s.ID(), "input": []any{map[string]any{"type": "text", "text": text}}}, 15*time.Second)
+		res, err := s.rpc("turn/start", map[string]any{"threadId": s.ID(), "input": []any{map[string]any{"type": "text", "text": text}}}, 60*time.Second)
 		if err != nil {
 			return "", err
 		}
@@ -362,7 +362,7 @@ func (s *Session) Prompt(text, level string) (string, error) {
 		if level == "" {
 			level = "full"
 		}
-		if _, err := s.rpc("plexus.prompt", map[string]any{"sessionId": s.ID(), "text": text, "level": level}, 15*time.Second); err != nil {
+		if _, err := s.rpc("plexus.prompt", map[string]any{"sessionId": s.ID(), "text": text, "level": level}, 60*time.Second); err != nil {
 			return "", err
 		}
 	case ACP:

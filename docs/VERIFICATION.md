@@ -29,8 +29,12 @@
 默认（快速，CI 用）——跳过重型自检：
 
 ```bash
-go test ./tests/...
+go test -p 1 ./tests/...
 ```
+
+> `-p 1` 串行跑各包：conformance 自检会起子进程做 RPC 回合，若与其他包的
+> `go build`/子进程并发抢 CPU，偶发超时（纯环境争用，非逻辑缺陷）。CI 的
+> `go test -race` 步骤同样加了 `-p 1`。
 
 重型 refhub 自检套件（验证套件本身，非产品；进程组/账本/审批全链路）：
 
@@ -148,9 +152,14 @@ go test ./internal/adapters/codex/ -run TestFinalAnswerPhaseAndWillRetry -count=
 
 ## 6. 已知风险与缺口（详见验收报告）
 
-- **关口只看命令行**：脚本内部、git alias/hook/refspec、任意 HTTP、拼接混淆、
-  `cd` 改变相对路径、子 shell 与 `$(...)` 替换、npx/包装器均可能绕过；MCP 工具
-  仅按名字匹配。模型可把被拦动作改写成脚本再逃逸。
+- **关口只看命令行**：脚本内部、git alias/hook/refspec、任意 HTTP、拼接混淆均可能绕过；
+  MCP 工具仅按名字匹配；模型可把被拦动作改写成脚本再逃逸。
+- **关口向量现状**（`tests/gate`，直调真实 `internal/danger.Classify`）：
+  本套件最初记录 13 项骨架旁路；builder 已修复其中 8+ 项（`cd` 改相对路径、
+  子 shell `(git push -f)`、npx 包装、`regedit /s`、`Add-AppxPackage`、
+  `*Installer.exe` 后缀、写系统目录/重定向、`curl … chat.postMessage`→`out.api`、
+  outside-workdir 删除经 `Deletes` 字段），这些已转成**严格断言**作为回归守卫。
+  **仍未修**：`$(...)` 命令替换未展开（`exec.opaque` 未触发）——记为 builder bug。
 - **ready 行当前打到 STDERR**，评审要求 STDOUT——记为 builder bug（见报告）。
 - **真实 hub 行为仿真**目前以 refhub 为参照验证；真实二进制已通过冒烟（启动+Socket），
   完整行为仿真需进一步对齐 harness 帧格式/host 工具协议（见报告“集成点”）。

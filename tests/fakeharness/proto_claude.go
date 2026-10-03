@@ -198,6 +198,7 @@ func (d *claudeDriver) turn(text string, cancel <-chan struct{}) {
 	io := &claudeIO{d: d, cancel: cancel}
 	final, err := d.b.Turn(io, text)
 	if err != nil {
+		d.r.freeSlot()
 		d.w.send(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true,
 			"session_id": d.sid(), "duration_ms": time.Since(start).Milliseconds(), "num_turns": 1})
 		return
@@ -207,6 +208,7 @@ func (d *claudeDriver) turn(text string, cancel <-chan struct{}) {
 			"message": map[string]any{"id": fmt.Sprintf("msg_%d", time.Now().UnixNano()), "role": "assistant", "model": "fake-claude",
 				"content": []any{map[string]any{"type": "text", "text": final}}}})
 	}
+	d.r.freeSlot()
 	d.w.send(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": final,
 		"session_id": d.sid(), "duration_ms": time.Since(start).Milliseconds(), "num_turns": 1, "total_cost_usd": 0})
 }

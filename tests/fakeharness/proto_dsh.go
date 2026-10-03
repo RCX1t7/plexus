@@ -109,12 +109,14 @@ func (d *dshDriver) turn(turn, text string, cancel <-chan struct{}) {
 	io := &dshIO{d: d, turn: turn, cancel: cancel}
 	final, err := d.b.Turn(io, text)
 	if err != nil {
+		d.r.freeSlot()
 		d.event(turn, map[string]any{"kind": "error", "text": "cancelled", "status": "cancelled"})
 		return
 	}
 	if final != "" {
 		d.event(turn, map[string]any{"kind": "message", "text": final})
 	}
+	d.r.freeSlot()
 	d.event(turn, map[string]any{"kind": "final", "text": final})
 }
 
