@@ -126,3 +126,18 @@ func TestFileChangeDeletes(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+func TestParkedDeclineSteersReason(t *testing.T) {
+	s := start(t, fakes.Options(t, "codex"))
+	park := fakes.Driver{Decide: func(harness.PermissionRequest) harness.Decision {
+		return harness.Decision{Allow: false, Reason: "已暂挂，等 Sin 批准 (parked)"}
+	}}
+	if fin, _ := park.Turn(t, s, "TOOL shell git-push-f", harness.LevelFull); fin.Text != "decision:decline" {
+		t.Fatalf("%q", fin.Text)
+	}
+	// The fake hands the next SLOW turn whatever was steered: the reason.
+	fin, _ := fakes.Driver{}.Turn(t, s, "SLOW", harness.LevelFull)
+	if !strings.Contains(fin.Text, "已暂挂，等 Sin 批准") || !strings.Contains(fin.Text, "git-push-f") {
+		t.Fatalf("%q", fin.Text)
+	}
+}

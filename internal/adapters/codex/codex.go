@@ -232,6 +232,14 @@ func (s *session) Send(ctx context.Context, t harness.Turn) (string, error) {
 	return id, nil
 }
 
+// steerReason explains a declined call to the model via turn/steer.
+func (s *session) steerReason(req harness.ToolRequest, reason string) {
+	what := firstNonEmpty(req.Command, strings.Join(req.Paths, ", "), req.Name)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.Steer(ctx, "[Plexus] Your call ("+strings.ReplaceAll(what, "\n", " ")+") was not run: "+strings.ReplaceAll(reason, "\n", " "))
+}
+
 // Steer folds text into the running turn (turn/steer, experimental API).
 func (s *session) Steer(ctx context.Context, text string) error {
 	s.mu.Lock()
@@ -527,7 +535,14 @@ func (s *session) request(method string, raw json.RawMessage, reply func(any, *h
 		ev := e
 		ev.ID = "req-" + firstNonEmpty(env.ItemID, method)
 		ev.Perm = &harness.PermissionRequest{Tool: req, Reason: reason, Options: opts}
-		s.em.Ask(tctx, ev, func(d harness.Decision) { reply(answer(d), nil) })
+		s.em.Ask(tctx, ev, func(d harness.Decision) {
+			reply(answer(d), nil)
+			if !d.Allow && d.Reason != "" {
+				// A bare decline reads like the user said no. Tell the model
+				// why (e.g. parked for Sin's approval) on the running turn.
+				go s.steerReason(req, d.Reason)
+			}
+		})
 	}
 	decision := func(yes, always, no string) func(harness.Decision) any {
 		return func(d harness.Decision) any {
