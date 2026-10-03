@@ -30,6 +30,9 @@ func claude() {
 		session = r
 	}
 	interrupted := make(chan struct{}, 1)
+	steered := make(chan string, 1)
+	var busy sync.Mutex
+	slow := false
 	turns := make(chan string, 8)
 	go func() {
 		for text := range turns {
@@ -61,10 +64,39 @@ func claude() {
 				ans, _ := ui["answers"].(map[string]any)
 				reply = "answer:" + toString(r["behavior"]) + ":" + toString(ans["Which DB?"])
 			case len(f) >= 1 && f[0] == "SLOW":
-				<-interrupted
-				o.send(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true,
-					"session_id": session, "terminal_reason": "aborted_streaming"})
-				continue
+				busy.Lock()
+				slow = true
+				busy.Unlock()
+				select {
+				case <-interrupted:
+					busy.Lock()
+					slow = false
+					busy.Unlock()
+					o.send(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true,
+						"session_id": session, "terminal_reason": "aborted_streaming"})
+					continue
+				case st := <-steered:
+					reply = "steered: " + st
+				}
+			case len(f) >= 2 && f[0] == "HOST":
+				args := map[string]any{}
+				_ = json.Unmarshal([]byte(strings.Join(f[2:], " ")), &args)
+				l := ask(map[string]any{"subtype": "mcp_message", "server_name": "plexus",
+					"message": map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}})
+				mr, _ := l["mcp_response"].(map[string]any)
+				res, _ := mr["result"].(map[string]any)
+				tools, _ := res["tools"].([]any)
+				r := ask(map[string]any{"subtype": "mcp_message", "server_name": "plexus",
+					"message": map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": f[1], "arguments": args}}})
+				mr, _ = r["mcp_response"].(map[string]any)
+				res, _ = mr["result"].(map[string]any)
+				content, _ := res["content"].([]any)
+				text := ""
+				if len(content) > 0 {
+					c0, _ := content[0].(map[string]any)
+					text = toString(c0["text"])
+				}
+				reply = "host:" + strconv.Itoa(len(tools)) + ":" + text + ":" + toString(res["isError"])
 			case len(f) >= 1 && f[0] == "BG":
 				o.send(map[string]any{"type": "system", "subtype": "task_started", "task_id": "task-1", "session_id": session})
 			}
@@ -73,7 +105,7 @@ func claude() {
 			o.send(map[string]any{"type": "assistant", "session_id": session, "parent_tool_use_id": nil,
 				"message": map[string]any{"id": "m2", "content": []any{map[string]any{"type": "text", "text": reply}}}})
 			o.send(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": reply, "session_id": session})
-			if len(f) >= 1 && f[0] == "BG" {
+			if len(f) >= 1 && f[0] == "BGDONE" {
 				o.send(map[string]any{"type": "system", "subtype": "task_notification", "task_id": "task-1",
 					"status": "completed", "summary": "background done", "session_id": session})
 			}
@@ -122,6 +154,14 @@ func claude() {
 			if i := strings.LastIndex(text, "\n"); i >= 0 {
 				text = text[i+1:] // drop the Plexus speaker frame
 			}
+			busy.Lock()
+			if slow { // a user message during a turn steers it
+				slow = false
+				busy.Unlock()
+				steered <- text
+				continue
+			}
+			busy.Unlock()
 			turns <- text
 		}
 	}

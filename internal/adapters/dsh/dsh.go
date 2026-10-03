@@ -14,13 +14,16 @@
 // yet. See docs/DSH_BRIDGE.md for the protocol.
 //
 //	client -> dsh  plexus.initialize   {protocol, client}            -> {protocol, capabilities}
-//	client -> dsh  plexus.session.open {cwd, persona, resume}        -> {sessionId}
+//	client -> dsh  plexus.session.open {cwd, persona, resume, tools} -> {sessionId}
 //	client -> dsh  plexus.prompt       {sessionId, text, level}      -> {turnId}
 //	client -> dsh  plexus.cancel       {sessionId}                   -> {}
+//	client -> dsh  plexus.steer        {sessionId, text}             -> {}
+//	client -> dsh  plexus.stopTask     {sessionId, taskId}           -> {}
 //	client -> dsh  plexus.control      {sessionId, name, payload}    -> any
 //	dsh -> client  plexus.event        (notification) harness.Event fields
 //	dsh -> client  plexus.permission   {turnId,id,parentId,tool,reason,options} -> {allow,optionId,always,reason}
 //	dsh -> client  plexus.question     {turnId,id,parentId,questions}           -> {answers}
+//	dsh -> client  plexus.tool         {turnId,id,name,arguments}               -> {text,isError}
 package dsh
 
 import (
@@ -48,7 +51,8 @@ func (Adapter) Name() string { return "dsh" }
 func (Adapter) Capabilities() harness.Capabilities {
 	n, u := harness.Native, harness.Unsupported
 	return harness.Capabilities{PermissionCallback: n, AskUser: n, BackgroundTasks: n, Subagents: n,
-		SlashCommands: u, Effort: u, Resume: n, Interrupt: n, StopHook: u, SystemPrompt: n, Control: n}
+		SlashCommands: u, Effort: u, Resume: n, Interrupt: n, StopHook: u, SystemPrompt: n, Control: n,
+		PerTaskStop: n, HostTools: n} // via the bridge plugin: UNVERIFIED
 }
 
 // Detect runs `dsh --version` and checks DSH's documented credential
@@ -94,7 +98,7 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	if err != nil {
 		return nil, err
 	}
-	s := &session{p: p, rpc: harness.NewRPC(p, true), em: harness.NewEmitter()}
+	s := &session{p: p, rpc: harness.NewRPC(p, true), em: harness.NewEmitter(), tasks: map[string]bool{}}
 	s.rpc.OnNotify = s.notify
 	s.rpc.OnRequest = s.request
 	go func() { s.rpc.Run(); s.exited() }()
@@ -114,8 +118,12 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	var res struct {
 		SessionID string `json:"sessionId"`
 	}
+	tools := o.HostTools
+	if tools == nil {
+		tools = []harness.ToolSpec{}
+	}
 	if err := s.rpc.Call(cctx, "plexus.session.open", map[string]any{"cwd": o.Workdir,
-		"persona": o.Persona, "resume": o.ResumeID}, &res); err != nil {
+		"persona": o.Persona, "resume": o.ResumeID, "tools": tools}, &res); err != nil {
 		return fail(fmt.Errorf("dsh session open: %w", err))
 	}
 	s.id = res.SessionID
@@ -132,6 +140,31 @@ type session struct {
 	mu     sync.Mutex
 	native string // bridge turn id of the running turn
 	plexus string // Plexus turn id
+	tasks  map[string]bool
+}
+
+// Steer folds text into the running turn.
+func (s *session) Steer(ctx context.Context, text string) error {
+	if cur, _ := s.turn.Current(); cur == "" {
+		return errors.New("no turn running")
+	}
+	return s.rpc.Call(ctx, "plexus.steer", map[string]any{"sessionId": s.id, "text": text}, nil)
+}
+
+// BackgroundTasks lists background jobs the bridge reported as running.
+func (s *session) BackgroundTasks() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for id := range s.tasks {
+		out = append(out, id)
+	}
+	return out
+}
+
+// StopTask stops one background job.
+func (s *session) StopTask(ctx context.Context, id string) error {
+	return s.rpc.Call(ctx, "plexus.stopTask", map[string]any{"sessionId": s.id, "taskId": id}, nil)
 }
 
 func (s *session) ID() string                   { return s.id }
@@ -224,6 +257,16 @@ func (s *session) notify(method string, raw json.RawMessage) {
 	}
 	e := w.Event
 	e.TurnID, e.SessionID, e.Raw = s.mapTurn(w.BridgeTurn), s.id, raw
+	if e.Kind == harness.EventBackground && e.Name != "" {
+		s.mu.Lock()
+		switch e.Status {
+		case "started", "running":
+			s.tasks[e.Name] = true
+		default:
+			delete(s.tasks, e.Name)
+		}
+		s.mu.Unlock()
+	}
 	if e.Kind == harness.EventFinal || (e.Kind == harness.EventError && e.TurnID != "") {
 		if !s.turn.End(e.TurnID) {
 			return
@@ -241,6 +284,8 @@ func (s *session) request(method string, raw json.RawMessage, reply func(any, *h
 		Reason    string                     `json:"reason"`
 		Options   []harness.PermissionOption `json:"options"`
 		Questions []harness.Question         `json:"questions"`
+		Name      string                     `json:"name"`
+		Arguments any                        `json:"arguments"`
 	}
 	_ = json.Unmarshal(raw, &w)
 	_, tctx := s.turn.Current()
@@ -254,6 +299,10 @@ func (s *session) request(method string, raw json.RawMessage, reply func(any, *h
 	case "plexus.question":
 		e.Questions = w.Questions
 		s.em.AskQuestions(tctx, e, func(a harness.Answers) { reply(map[string]any{"answers": a}, nil) })
+	case "plexus.tool":
+		e.Name = w.Name
+		e.Tool = &harness.ToolRequest{CallID: w.ID, Name: w.Name, Kind: harness.ToolMeta, Input: w.Arguments}
+		s.em.CallTool(tctx, e, func(r harness.HostResult) { reply(map[string]any{"text": r.Text, "isError": r.IsError}, nil) })
 	default:
 		reply(nil, &harness.RPCError{Code: -32601, Message: "Plexus does not handle " + method})
 	}

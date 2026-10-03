@@ -62,7 +62,8 @@ func (a *Adapter) Name() string { return a.cfg.Name }
 func (a *Adapter) Capabilities() harness.Capabilities {
 	n, e, u := harness.Native, harness.Emulated, harness.Unsupported
 	return harness.Capabilities{PermissionCallback: n, AskUser: u, BackgroundTasks: u, Subagents: u,
-		SlashCommands: n, Effort: u, Resume: n, Interrupt: n, StopHook: u, SystemPrompt: e, Control: n}
+		SlashCommands: n, Effort: u, Resume: n, Interrupt: n, StopHook: u, SystemPrompt: e, Control: n,
+		PerTaskStop: u, HostTools: u}
 }
 
 func (a *Adapter) Detect(ctx context.Context, env harness.Env) harness.DetectionResult {

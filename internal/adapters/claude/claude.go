@@ -16,6 +16,12 @@
 // the initialize control request, so even tools Claude Code would
 // auto-approve (Read, Grep, ...) reach the Plexus policy. AskUserQuestion is
 // answered through the can_use_tool callback.
+//
+// Plexus host tools (plexus_post, ...) are mounted as an in-process "sdk"
+// MCP server named "plexus" (--mcp-config + initialize.sdkMcpServers);
+// Claude Code then tunnels MCP JSON-RPC through mcp_message control
+// requests. UNVERIFIED against a live Claude Code: the shapes follow the
+// Agent SDK wire format.
 package claude
 
 import (
@@ -48,7 +54,8 @@ func (Adapter) Name() string { return "claude_code" }
 func (Adapter) Capabilities() harness.Capabilities {
 	n := harness.Native
 	return harness.Capabilities{PermissionCallback: n, AskUser: n, BackgroundTasks: n, Subagents: n,
-		SlashCommands: n, Effort: n, Resume: n, Interrupt: n, StopHook: n, SystemPrompt: n, Control: n}
+		SlashCommands: n, Effort: n, Resume: n, Interrupt: n, StopHook: n, SystemPrompt: n, Control: n,
+		PerTaskStop: n, HostTools: n}
 }
 
 // Detect looks for the CLI and local login evidence only.
@@ -97,12 +104,16 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	if o.Persona != "" {
 		args = append(args, "--append-system-prompt", o.Persona)
 	}
+	if len(o.HostTools) > 0 {
+		args = append(args, "--mcp-config", `{"mcpServers":{"plexus":{"type":"sdk","name":"plexus"}}}`)
+	}
 	args = append(args, o.Args...)
 	p, err := harness.StartProc(ctx, exe, args, o.Workdir, o.Env)
 	if err != nil {
 		return nil, err
 	}
-	s := &session{p: p, em: harness.NewEmitter(), pending: map[string]chan map[string]any{}}
+	s := &session{p: p, em: harness.NewEmitter(), pending: map[string]chan map[string]any{},
+		tools: o.HostTools, tasks: map[string]bool{}}
 	s.id.Store(o.ResumeID)
 	go s.read()
 	// perTaskStopAffordance: an interrupt then stops only the foreground
@@ -112,6 +123,9 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 		"PreToolUse": []any{map[string]any{"matcher": nil, "hookCallbackIds": []string{preToolHook}}},
 		"Stop":       []any{map[string]any{"matcher": nil, "hookCallbackIds": []string{stopHook}}},
 	}}
+	if len(o.HostTools) > 0 {
+		init["sdkMcpServers"] = []string{"plexus"}
+	}
 	ictx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	if _, err := s.control(ictx, init); err != nil {
@@ -133,6 +147,38 @@ type session struct {
 	tmu      sync.Mutex
 	text     strings.Builder // committed root-agent text of the current turn
 	sawDelta bool
+
+	tools []harness.ToolSpec
+	kmu   sync.Mutex
+	tasks map[string]bool // running background task ids
+}
+
+// Steer writes a user message while a turn runs; Claude Code folds queued
+// user messages into the running turn. UNVERIFIED on a live CLI.
+func (s *session) Steer(ctx context.Context, text string) error {
+	if id, _ := s.turn.Current(); id == "" {
+		return errors.New("no turn running")
+	}
+	return s.p.Write(map[string]any{"type": "user", "session_id": s.ID(), "parent_tool_use_id": nil,
+		"message": map[string]any{"role": "user", "content": text}})
+}
+
+// BackgroundTasks lists background tasks Claude Code reported as started
+// and not yet finished.
+func (s *session) BackgroundTasks() []string {
+	s.kmu.Lock()
+	defer s.kmu.Unlock()
+	var out []string
+	for id := range s.tasks {
+		out = append(out, id)
+	}
+	return out
+}
+
+// StopTask stops one background task (needs perTaskStopAffordance).
+func (s *session) StopTask(ctx context.Context, id string) error {
+	_, err := s.control(ctx, map[string]any{"subtype": "stop_task", "task_id": id})
+	return err
 }
 
 func (s *session) ID() string                   { v, _ := s.id.Load().(string); return v }
@@ -343,6 +389,16 @@ func (s *session) read() {
 				}
 			case strings.HasPrefix(m.Subtype, "task_"):
 				e.Kind, e.Name, e.Status = harness.EventBackground, m.TaskID, m.Subtype
+				if m.TaskID != "" {
+					s.kmu.Lock()
+					if m.Subtype == "task_started" {
+						s.tasks[m.TaskID] = true
+					} else if strings.Contains(m.Subtype, "notification") || strings.Contains(m.Subtype, "completed") ||
+						strings.Contains(m.Subtype, "stopped") || strings.Contains(m.Subtype, "failed") {
+						delete(s.tasks, m.TaskID)
+					}
+					s.kmu.Unlock()
+				}
 				if strings.Contains(m.Subtype, "notification") || strings.Contains(m.Subtype, "completed") {
 					e.TurnID = "" // background results may arrive after the turn ended
 				}
@@ -385,13 +441,15 @@ func (s *session) respondErr(id, msg string) {
 
 func (s *session) handleControl(tctx context.Context, base harness.Event, id string, raw json.RawMessage) {
 	var r struct {
-		Subtype     string         `json:"subtype"`
-		ToolName    string         `json:"tool_name"`
-		Input       map[string]any `json:"input"`
-		CallbackID  string         `json:"callback_id"`
-		ToolUseID   string         `json:"tool_use_id"`
-		Suggestions []any          `json:"permission_suggestions"`
-		Reason      any            `json:"decision_reason"`
+		Subtype     string          `json:"subtype"`
+		ToolName    string          `json:"tool_name"`
+		Input       map[string]any  `json:"input"`
+		CallbackID  string          `json:"callback_id"`
+		ToolUseID   string          `json:"tool_use_id"`
+		Suggestions []any           `json:"permission_suggestions"`
+		Reason      any             `json:"decision_reason"`
+		ServerName  string          `json:"server_name"`
+		Message     json.RawMessage `json:"message"`
 	}
 	_ = json.Unmarshal(raw, &r)
 	base.ID = "req-" + id
@@ -460,8 +518,61 @@ func (s *session) handleControl(tctx context.Context, base harness.Event, id str
 			}
 			s.respond(id, body)
 		})
+	case "mcp_message":
+		if r.ServerName != "plexus" {
+			s.respondErr(id, "unknown MCP server "+r.ServerName)
+			return
+		}
+		s.mcp(tctx, base, id, r.Message)
 	default:
 		s.respondErr(id, "unsupported control request: "+r.Subtype)
+	}
+}
+
+// mcp answers one JSON-RPC message for the in-process "plexus" MCP server.
+func (s *session) mcp(tctx context.Context, base harness.Event, id string, raw json.RawMessage) {
+	var m struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params struct {
+			ProtocolVersion string         `json:"protocolVersion"`
+			Name            string         `json:"name"`
+			Arguments       map[string]any `json:"arguments"`
+		} `json:"params"`
+	}
+	_ = json.Unmarshal(raw, &m)
+	reply := func(result any) {
+		rid := m.ID
+		if len(rid) == 0 {
+			rid = json.RawMessage("0")
+		}
+		s.respond(id, map[string]any{"mcp_response": map[string]any{"jsonrpc": "2.0", "id": rid, "result": result}})
+	}
+	switch m.Method {
+	case "initialize":
+		reply(map[string]any{"protocolVersion": firstNonEmpty(m.Params.ProtocolVersion, "2025-06-18"),
+			"capabilities": map[string]any{"tools": map[string]any{}},
+			"serverInfo":   map[string]any{"name": "plexus", "version": "1"}})
+	case "tools/list":
+		var tools []map[string]any
+		for _, t := range s.tools {
+			tools = append(tools, map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.InputSchema})
+		}
+		reply(map[string]any{"tools": tools})
+	case "tools/call":
+		e := base
+		e.Name = m.Params.Name
+		e.Tool = &harness.ToolRequest{Name: m.Params.Name, Kind: harness.ToolMeta, Input: m.Params.Arguments, CallID: base.ID}
+		s.em.CallTool(tctx, e, func(r harness.HostResult) {
+			reply(map[string]any{"content": []any{map[string]any{"type": "text", "text": r.Text}}, "isError": r.IsError})
+		})
+	default:
+		if strings.HasPrefix(m.Method, "notifications/") {
+			reply(map[string]any{})
+			return
+		}
+		s.respond(id, map[string]any{"mcp_response": map[string]any{"jsonrpc": "2.0", "id": m.ID,
+			"error": map[string]any{"code": -32601, "message": "method not found"}}})
 	}
 }
 
@@ -518,7 +629,8 @@ func toolRequest(name string, in map[string]any) harness.ToolRequest {
 		r.Kind = harness.ToolFetch
 	case "AskUserQuestion":
 		r.Kind = harness.ToolAsk
-	case "TodoWrite", "ExitPlanMode", "Agent", "Task", "Skill":
+	case "TodoWrite", "ExitPlanMode", "Agent", "Task", "Skill",
+		"mcp__plexus__plexus_post", "mcp__plexus__plexus_delegate", "mcp__plexus__plexus_deliver", "mcp__plexus__plexus_stop_tree":
 		r.Kind = harness.ToolMeta
 	}
 	return r

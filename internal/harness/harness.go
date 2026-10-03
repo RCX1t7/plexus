@@ -42,7 +42,7 @@ type Capabilities struct {
 	Interrupt          Support `json:"interrupt"` // stop a running turn
 	StopHook           Support `json:"stop_hook"` // native hook when the agent wants to stop
 	SystemPrompt       Support `json:"system_prompt"`
-	Control            Support `json:"control"` // raw Control(name, payload) passthrough
+	Control            Support `json:"control"`       // raw Control(name, payload) passthrough
 	PerTaskStop        Support `json:"per_task_stop"` // stop one background task / subagent
 	HostTools          Support `json:"host_tools"`    // Plexus tools (plexus_post ...) mounted natively
 }

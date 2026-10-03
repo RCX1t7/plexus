@@ -148,7 +148,8 @@ func (w *Worker) log() *slog.Logger {
 }
 
 func (w *Worker) hostTools() bool {
-	return w.Harness.Capabilities().HostTools != harness.Unsupported
+	c := w.Harness.Capabilities().HostTools
+	return c == harness.Native || c == harness.Emulated
 }
 
 // isStop reports an exact stop word (case-insensitive "stop", or "停").

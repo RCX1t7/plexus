@@ -106,6 +106,14 @@ func lastLine(text string) string {
 	return text
 }
 
+var steerCh = make(chan string, 1)
+
+func hostArgs(f []string) map[string]any {
+	args := map[string]any{}
+	_ = json.Unmarshal([]byte(strings.Join(f[2:], " ")), &args)
+	return args
+}
+
 func codex(s *server, method string, p map[string]any) (any, *rpcErr) {
 	switch method {
 	case "initialize":
@@ -118,7 +126,19 @@ func codex(s *server, method string, p map[string]any) (any, *rpcErr) {
 			id = t
 		}
 		return map[string]any{"thread": map[string]any{"id": id}}, nil
+	case "turn/steer":
+		in, _ := p["input"].([]any)
+		first, _ := in[0].(map[string]any)
+		if toString(p["expectedTurnId"]) != "tu-1" {
+			return nil, &rpcErr{Code: -32600, Message: "turn mismatch"}
+		}
+		steerCh <- lastLine(toString(first["text"]))
+		return map[string]any{}, nil
 	case "turn/interrupt":
+		select {
+		case steerCh <- "\x00cancel":
+		default:
+		}
 		s.notify("turn/completed", map[string]any{"threadId": "th-1", "turn": map[string]any{"id": "tu-1", "status": "interrupted"}})
 		return map[string]any{}, nil
 	case "turn/start":
@@ -137,7 +157,20 @@ func codexTurn(s *server, text string) {
 	f := fields(text)
 	switch {
 	case len(f) >= 1 && f[0] == "SLOW":
-		return // completes on turn/interrupt
+		st := <-steerCh
+		if st == "\x00cancel" {
+			return // turn/interrupt already completed the turn
+		}
+		reply = "steered: " + st
+	case len(f) >= 2 && f[0] == "HOST":
+		r := s.call("item/tool/call", map[string]any{"threadId": th, "turnId": tu, "callId": "dt1", "tool": f[1], "arguments": hostArgs(f)})
+		items, _ := r["contentItems"].([]any)
+		text := ""
+		if len(items) > 0 {
+			i0, _ := items[0].(map[string]any)
+			text = toString(i0["text"])
+		}
+		reply = "host:" + text + ":" + toString(r["success"])
 	case len(f) >= 1 && f[0] == "RETRY":
 		s.notify("error", map[string]any{"threadId": th, "turnId": tu, "willRetry": true, "error": map[string]any{"message": "stream disconnected"}})
 	case len(f) >= 3 && f[0] == "TOOL" && f[1] == "shell":
@@ -212,6 +245,15 @@ func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 		}
 		return map[string]any{"sessionId": id}, nil
 	case "plexus.cancel":
+		select {
+		case steerCh <- "\x00cancel":
+		default:
+		}
+		return map[string]any{}, nil
+	case "plexus.steer":
+		steerCh <- lastLine(toString(p["text"]))
+		return map[string]any{}, nil
+	case "plexus.stopTask":
 		return map[string]any{}, nil
 	case "plexus.control":
 		return map[string]any{"name": p["name"]}, nil
@@ -222,6 +264,18 @@ func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 			f := fields(text)
 			// events first: they race the prompt reply on purpose
 			s.notify("plexus.event", map[string]any{"turnId": "bt-1", "kind": "text_delta", "text": "e"})
+			if len(f) >= 1 && f[0] == "SLOW" {
+				st := <-steerCh
+				if st == "\x00cancel" {
+					s.notify("plexus.event", map[string]any{"turnId": "bt-1", "kind": "error", "text": "cancelled"})
+					return
+				}
+				reply = "steered: " + st
+			}
+			if len(f) >= 2 && f[0] == "HOST" {
+				r := s.call("plexus.tool", map[string]any{"turnId": "bt-1", "id": "t1", "name": f[1], "arguments": hostArgs(f)})
+				reply = "host:" + toString(r["text"]) + ":" + toString(r["isError"])
+			}
 			if len(f) >= 3 && f[0] == "TOOL" {
 				r := s.call("plexus.permission", map[string]any{"turnId": "bt-1", "id": "p1",
 					"tool": map[string]any{"name": "fs.read", "kind": f[1], "paths": []string{f[2]}}})

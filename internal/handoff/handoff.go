@@ -1,9 +1,10 @@
-// Package handoff is the structured record that travels with every
-// cross-bot task handoff, next to the signed task token. The token says
-// what the receiver may do; the handoff says what the work is and when it
-// is done.
+// Package handoff is the six-field record that travels with a task when one
+// partner hands work to another. It is a plain record, not authorization:
+// it says what the work is and when it is done. It is stored in the hub's
+// database and shown in Slack as a compact card.
 //
-// A bot hands off by mentioning a peer and writing a block like:
+// Partners with host tools use plexus_delegate; others mention a peer and
+// write a block like:
 //
 //	HANDOFF
 //	task: Add retries to the uploader

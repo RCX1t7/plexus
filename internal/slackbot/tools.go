@@ -7,7 +7,7 @@ import (
 	"github.com/RCX1t7/plexus/internal/harness"
 )
 
-func jsonMarshal(v any) ([]byte, error)  { return json.Marshal(v) }
+func jsonMarshal(v any) ([]byte, error)   { return json.Marshal(v) }
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
 func schema(s string) json.RawMessage     { return json.RawMessage(s) }
 

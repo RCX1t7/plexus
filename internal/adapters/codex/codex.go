@@ -27,7 +27,8 @@ func (Adapter) Name() string { return "codex" }
 func (Adapter) Capabilities() harness.Capabilities {
 	n, u := harness.Native, harness.Unsupported
 	return harness.Capabilities{PermissionCallback: n, AskUser: n, BackgroundTasks: n, Subagents: n,
-		SlashCommands: u, Effort: n, Resume: n, Interrupt: n, StopHook: u, SystemPrompt: n, Control: n}
+		SlashCommands: u, Effort: n, Resume: n, Interrupt: n, StopHook: u, SystemPrompt: n, Control: n,
+		PerTaskStop: u, HostTools: n} // host tools: experimental dynamicTools, UNVERIFIED
 }
 
 // Detect: `codex --version` plus auth.json existence. No app-server start.
@@ -90,8 +91,12 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	fail := func(err error) (harness.Session, error) { s.Close(); return nil, err }
-	if err := s.rpc.Call(cctx, "initialize", map[string]any{
-		"clientInfo": map[string]any{"name": "plexus", "title": "Plexus", "version": "0.1.0"}}, nil); err != nil {
+	initParams := map[string]any{"clientInfo": map[string]any{"name": "plexus", "title": "Plexus", "version": "0.1.0"}}
+	if len(o.HostTools) > 0 {
+		// dynamicTools and turn/steer sit behind the experimental API.
+		initParams["capabilities"] = map[string]any{"experimentalApi": true}
+	}
+	if err := s.rpc.Call(cctx, "initialize", initParams, nil); err != nil {
 		return fail(fmt.Errorf("codex initialize: %w", err))
 	}
 	if err := s.rpc.Notify("initialized", map[string]any{}); err != nil {
@@ -108,6 +113,13 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	params := map[string]any{"cwd": o.Workdir, "approvalPolicy": approval, "sandbox": "read-only"}
 	if o.Persona != "" {
 		params["developerInstructions"] = o.Persona
+	}
+	if len(o.HostTools) > 0 {
+		var tools []map[string]any
+		for _, t := range o.HostTools {
+			tools = append(tools, map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.InputSchema})
+		}
+		params["dynamicTools"] = tools
 	}
 	method := "thread/start"
 	if o.ResumeID != "" {
@@ -202,6 +214,18 @@ func (s *session) Send(ctx context.Context, t harness.Turn) (string, error) {
 		}
 	}()
 	return id, nil
+}
+
+// Steer folds text into the running turn (turn/steer, experimental API).
+func (s *session) Steer(ctx context.Context, text string) error {
+	s.mu.Lock()
+	n := s.native
+	s.mu.Unlock()
+	if n == "" {
+		return errors.New("no turn running")
+	}
+	return s.rpc.Call(ctx, "turn/steer", map[string]any{"threadId": s.thread, "expectedTurnId": n,
+		"input": []any{map[string]any{"type": "text", "text": text}}}, nil)
 }
 
 func (s *session) Interrupt(ctx context.Context) error {
@@ -466,6 +490,16 @@ func (s *session) request(method string, raw json.RawMessage, reply func(any, *h
 				out[id] = map[string]any{"answers": a}
 			}
 			reply(map[string]any{"answers": out}, nil)
+		})
+	case "item/tool/call": // a dynamic (Plexus host) tool
+		name, _ := p["tool"].(string)
+		callID, _ := p["callId"].(string)
+		ev := e
+		ev.ID, ev.Name = "tool-"+firstNonEmpty(callID, env.ItemID), name
+		ev.Tool = &harness.ToolRequest{CallID: callID, Name: name, Kind: harness.ToolMeta, Input: p["arguments"]}
+		s.em.CallTool(tctx, ev, func(r harness.HostResult) {
+			reply(map[string]any{"success": !r.IsError,
+				"contentItems": []any{map[string]any{"type": "inputText", "text": r.Text}}}, nil)
 		})
 	case "mcpServer/elicitation/request":
 		reply(map[string]any{"action": "decline", "content": nil}, nil)

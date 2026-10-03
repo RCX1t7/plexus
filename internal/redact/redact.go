@@ -11,16 +11,15 @@ import (
 const mask = "[REDACTED]"
 
 var patterns = []*regexp.Regexp{
-	regexp.MustCompile(`xox[a-z]-[A-Za-z0-9-]{6,}`),                       // Slack bot/user/app/legacy tokens
-	regexp.MustCompile(`xoxe[.-][A-Za-z0-9.-]{6,}`),                       // Slack refresh / config tokens
-	regexp.MustCompile(`xapp-[A-Za-z0-9-]{6,}`),                           // Slack app-level tokens
-	regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{8,}`),                        // Anthropic
-	regexp.MustCompile(`sk-[A-Za-z0-9_-]{16,}`),                           // OpenAI & co (incl. sk-proj-)
-	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{20,}`),                      // GitHub classic
-	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`),                    // GitHub fine-grained
-	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),                                // AWS access key id
-	regexp.MustCompile(`AIza[0-9A-Za-z_-]{30,}`),                          // Google API key
-	regexp.MustCompile(`plx1\.[a-z0-9]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`), // Plexus task tokens
+	regexp.MustCompile(`xox[a-z]-[A-Za-z0-9-]{6,}`),    // Slack bot/user/app/legacy tokens
+	regexp.MustCompile(`xoxe[.-][A-Za-z0-9.-]{6,}`),    // Slack refresh / config tokens
+	regexp.MustCompile(`xapp-[A-Za-z0-9-]{6,}`),        // Slack app-level tokens
+	regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{8,}`),     // Anthropic
+	regexp.MustCompile(`sk-[A-Za-z0-9_-]{16,}`),        // OpenAI & co (incl. sk-proj-)
+	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{20,}`),   // GitHub classic
+	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`), // GitHub fine-grained
+	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),             // AWS access key id
+	regexp.MustCompile(`AIza[0-9A-Za-z_-]{30,}`),       // Google API key
 	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`),
 	regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/-]{16,}=*`),
 	regexp.MustCompile(`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`), // JWT
