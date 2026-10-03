@@ -1,8 +1,11 @@
-*.db
-config.json
-secrets*
-!internal/secrets/
-.env
-plexus.exe
+# Build output
+/plexus.exe
 /plexus
+# Local state written next to the repo during development (never commit)
+/config.json
+/secrets*
+/*.db
+/*.db.tmp
+/control.json
+/.env
 *.log
