@@ -21,7 +21,7 @@
 | `internal/harness` | `Harness` / `Session` / `Event` / `Capabilities` 接口与注册表；探测（只跑 `--version`，只查凭据文件是否存在）；JSONL 与 JSON-RPC 子进程；Emitter（权限 / 提问 / 宿主工具的回调对象） |
 | `internal/adapters/claude` | Claude Code：`--input-format stream-json --output-format stream-json --permission-prompt-tool stdio`；`initialize` 中注册 PreToolUse 与 Stop hook；`sdkMcpServers` + `mcp_message` 提供 plexus 工具；`interrupt` / `stop_task` |
 | `internal/adapters/codex` | Codex `app-server`：`experimentalApi`、`dynamicTools`、`item/tool/call`、`turn/steer`、`turn/interrupt`；可信轮次 `approvalPolicy:"untrusted"` |
-| `internal/adapters/dsh` | DSH：`node …/@deepseek-ai/dsh/lib/bin.js --profile plexus` + bridge 插件（协议见 `DSH_BRIDGE.md`）；`plugin/` 用 go:embed 携带插件文件 |
+| `internal/adapters/dsh` | DSH：`node …/@deepseek-ai/dsh/lib/bin.js --profile plexus` + bridge 插件（协议见 `DSH_BRIDGE.md`）；`bridge/` 是 go:embed 槽位，插件由 adapter 工程师另行放入；安装到 `<DSH_HOME>/profiles/plexus/`；需要 Node ≥22.19；从不使用 `dsh.cmd` 或桌面版 profile |
 | `internal/adapters/acp` | 任意 ACP 代理，只靠配置接入（`acp_harnesses`）；内置 `gemini_cli`、`dsh_acp` |
 | `internal/slackbot` | 每个伙伴一个 Worker：Socket Mode 连接、入站去重、按线程串行、steer、提问、宿主工具、stop、审批、outbox 与对账 |
 | `internal/policy` | 判断这一轮的信任来源（Sin / 伙伴 / 陌生人），决定原生权限级别；陌生人只能读工作目录内的普通文件 |
@@ -91,8 +91,8 @@ flowchart LR
 
 `Turn.Level` 有三档：
 
-- `chat`：不带工具。
-- `readonly`：陌生人轮次，只能读工作目录。
+- `chat`：陌生人轮次。不允许任何写入或执行，也不能联网抓取；工作目录内只读仍允许。每个适配器都必须执行。
+- `readonly`：只读工作目录（目前核心不下发这一档）。
 - `full`：可信轮次。
 
 ### 4.2 存储：bbolt
@@ -126,6 +126,12 @@ flowchart LR
   - 不回"我很忙"。
   - 陌生人的消息不并入可信轮次。
 - **子进程**：Windows 上加入 `KILL_ON_JOB_CLOSE` 的 Job Object，其他平台用进程组；`Close` 结束整棵进程树。
+- **空闲卸载**：线程 5 分钟没有动静就关闭原生会话并结束 harness 进程（仍有后台任务时除外；Codex 通过 `IdleUnload()` 同样是 5 分钟）。空闲伙伴不保留 harness 进程；一个活跃的 DSH 会话约 162 MiB。下一条消息按保存的会话 id 续接。
+- **与桌面应用共存**（不做进程内会话锁）：
+  - 每次续接前检查会话是否在别处活跃。Claude：`~/.claude/sessions/*.json` 里有存活 pid 持有该会话，或 Plexus 上次使用后 2 分钟内 transcript 有改动；Codex：app-server 报告另一个活跃写入者；DSH：会话租约错误。三者都映射为 `harness.ErrActiveElsewhere`。
+  - 活跃时只发一条："⏸️ I did not resume this conversation… Close it there (or let it go idle), then send your message again."，不写入该会话。
+  - `DataDir/locks/workdir-<hash>.lock` 记录谁在哪个目录工作，只做警告，从不独占。
+  - 从不使用桌面版的 `dsh.cmd` 或 DSH profile。
 
 ## 5. 各 harness 的原生接入
 
@@ -221,28 +227,39 @@ ACP：只靠配置接入；`fs` 与 `terminal` 能力为 false；没有宿主工
 
 **`stranger_guard`**（默认 `true`，设置页可关）。开启时：
 
-- 陌生人的消息只触发 `readonly` 轮次，即 GuestLock。
+- 陌生人的消息只触发 `chat` 级别的轮次（`harness.LevelChat`），即 GuestLock。每个适配器都必须执行它：不允许任何写入或执行；工作目录内只读仍可（过滤 `extra_deny`），联网抓取不行。
 - 陌生人轮次中，伙伴发出的帖子在 `origins` 中记为陌生人来源，其他伙伴收到时也按陌生人对待。这样别人无法借伙伴之手越过边界。
 - 在陌生人轮次中，`plexus_delegate`、`plexus_deliver` 和 `plexus_stop_tree` 都会被拒绝。
 - 伙伴帖子找不到来源记录时（等待 `OriginWait` 后仍没有），按陌生人处理（fail closed）。
-- 没有 GuestLock 的 harness（Codex、ACP）不为陌生人启动任何轮次，只回一句："I can only take requests from my team here. Ask Sin if you need me."
+- 没有 GuestLock 的 harness（Codex、ACP，`GuestLock=Unsupported`）直接不理陌生人：不启动任何轮次，只回一句："I can only take requests from my team here. Ask Sin if you need me."
+
+**启动规则**（`supervisor.StartCheck`，表驱动测试 `TestStartCheck`）：
+
+- 直接不理陌生人的伙伴（`GuestLock=Unsupported`）不需要原生访客锁。
+- 边界开启时，会接收陌生人、却没有原生访客锁的伙伴（`GuestLock=Emulated`）**拒绝启动**，日志写明原因。
+- 没有阻塞式权限回调（`PermissionCallback≠Native`，即 harness 不会等 Plexus 答复再执行）的伙伴拒绝启动，除非设了 `bots[].ungated_ok: true`。
+- `ungated_ok` 只豁免危险操作关口，从不豁免访客锁。
+- 被拒绝的伙伴只记一条错误日志，不反复重试。
 
 ### 7.1 危险操作审批（Sin 唯一的审批关口）
 
-**分类**：`danger.Classify(Call, Ctx, Rules) → *Hit`，是纯函数，配有表驱动测试。
+**分类**：`danger.Classify(Call, Ctx, Rules) → *Hit`，是纯函数，配有表驱动测试。全系统**只有这一个**分类器，所有适配器（包括 DSH）都调用它；调用前由 `harness.Normalize(ToolRequest)` 按工具名和参数补全 Kind / Command / Paths，所以插件不需要自己判断。
 
 - 命令解析：
   - 按 `;` `&&` `||` `|` 和换行切分；
   - 剥掉 `cmd /c`、`powershell -Command`、`bash -c`、`sh -c`、`env`、`sudo` 和环境变量赋值；
   - `-EncodedCommand` 先解码再分类；
-  - 可执行文件名转小写，并去掉 `.exe`。
+  - 可执行文件名转小写，并去掉 `.exe`；
+  - git 的全局参数（`-C dir`、`-c k=v`、`--git-dir` 等）先跳过，再看子命令。
+- shell 调用的命令为空或读不到时，按命中处理（`exec.opaque`）。
 - 路径：`filepath.Clean`；Windows 上不区分大小写；含无法展开的 `~`、`$VAR`、`%VAR%` 时按命中处理。
 
 默认规则：
 
 | 规则 | 命中条件 |
 |---|---|
-| `git.force` | `push` 带 `-f`、`--force*`、`+refspec`、`--mirror`、`--delete`、`:ref` |
+| `git.force` | `push` 带 `-f`、`--force*`（含 `--force-with-lease`）、`+refspec`、`--mirror`、`--delete`、`:ref`；`push` 前有全局参数也算 |
+| `exec.opaque` | shell 调用的命令为空或无法读取 |
 | `git.rewrite` | `filter-branch`、`filter-repo`、bfg；HEAD 已推送时执行 `rebase`、`reset`、`commit --amend`（调用方先执行 `git merge-base --is-ancestor HEAD @{u}`） |
 | `fs.delete_outside` | rm/del/rd/Remove-Item/rimraf 等命令，或 delete 类文件变更，只要有路径在 workdir 外 |
 | `sys.registry` / `sys.service` / `sys.task` / `sys.env` / `sys.installer` / `sys.dir` | reg add/delete、注册表相关 cmdlet、sc、服务 cmdlet、schtasks、`setx /m`、msiexec/winget/choco/apt 安装、系统目录 |
@@ -255,24 +272,19 @@ ACP：只靠配置接入；`fs` 与 `terminal` 能力为 false；没有宿主工
 
 | Harness | 拦截点 |
 |---|---|
-| Claude | PreToolUse hook。命中后 hook 本身阻塞，等 Sin 决定后返回 allow 或 deny |
+| Claude | PreToolUse hook |
 | Codex | `item/commandExecution/requestApproval`、`item/fileChange/requestApproval`。可信轮次用 `approvalPolicy:"untrusted"`，所以所有非"安全"命令都会询问 |
-| DSH | `plexus.permission`（UNVERIFIED） |
+| DSH | `plexus.permission`（UNVERIFIED），经同一个 Go 分类器 |
 | ACP | `session/request_permission` |
 
-**等待期间**：
+**暂挂（parking）**：只挂起这一个调用，从不挂起整轮。
 
-- 回调一直阻塞；这一轮处于等待 Sin 的正常空闲，不影响其他线程。
-- 审批卡发在当前线程并 @Sin，内容包括伙伴、规则、命令或路径（已脱敏）、原因，带 Approve / Deny 按钮（Socket Mode interactivity）。
+- 命中后回调**立即**返回 deny，理由是 `已暂挂，等 Sin 批准`。这一轮继续：伙伴可以做别的事，或结束这一轮。
+- 审批卡发在当前线程并 @Sin，内容包括伙伴、规则、命令或路径（已脱敏）、原因，带 Approve / Deny 按钮（Socket Mode interactivity）。审批保存在 `approvals` 里。
 - **只有 Sin 的点击算数**，Sin 也可以在线程里回复 `approve` / `批准` / `同意` / `deny` / `拒绝`。
-- 批准只对这一次调用生效；拒绝时回 deny 并附说明。
-- 没有超时。
-
-**重启**：
-
-- 待批的审批保存在 `approvals` 里。重启后不重新发帖，而是用 `chat.update` 在原卡片上标注"Still waiting for Sin"。
-- 原来的宿主请求已随进程消失。Sin 之后批准的话，记成同一线程、同一调用指纹的**一次性预批准**，并告诉伙伴"可以重新发起一次"。
-- 伙伴重新发起相同调用时直接放行，审批随即标为 `consumed`。
+- Sin 批准后，记成同一线程、同一调用指纹的**一次性批准**，并告诉伙伴"可以重新发起一次"。伙伴重新发起**完全相同**的调用时放行一次，审批随即标为 `consumed`。
+- 拒绝时告诉伙伴不要再试。
+- 重启后不重新发帖，而是用 `chat.update` 在原卡片上标注"Still waiting for Sin"。因为回调从不阻塞，重启不会丢失任何正在等待的宿主请求。
 
 **与其他机制的关系**：
 
@@ -309,7 +321,7 @@ ACP：只靠配置接入；`fs` 与 `terminal` 能力为 false；没有宿主工
 
 **体积门槛**：`plexus.exe` ≤ 25 MiB（Sin 已从 15 MiB 放宽）。
 
-- 当前 windows/amd64 `-trimpath -ldflags="-s -w"` 构建约为 11.5 MiB，见最终报告中的实测值。
+- 当前 windows/amd64 `-trimpath -ldflags="-s -w"` 构建约为 11.6 MiB，见最终报告中的实测值。
 - DSH 插件将以 go:embed 嵌入，余量充足。
 
 **性能实测**（linux/amd64 开发机，fake Slack）：
@@ -324,7 +336,9 @@ Windows 上的数值待实测。内部吞吐（≥ 20k ev/s）未单独压测。
 
 **密钥**：
 
-- Slack token 只存 DPAPI 密钥库（`%APPDATA%\Plexus\secrets.dpapi`）。
+- DPAPI 密钥库（`%APPDATA%\Plexus\secrets.dpapi`）**只存 Plexus 自己的 Slack token**。
+- Slack OAuth 的 client secret 只在内存里存在，最多 10 分钟。
+- Plexus 从不存储、注入或清理 harness 的凭据，各 harness 用自己的登录。只从子进程环境里移除 `CLAUDECODE` 和 `CLAUDE_CODE_SIMPLE`；像认证信息的环境变量值登记到日志脱敏器，从不写进日志。
 - 其他系统必须显式设置 `PLEXUS_INSECURE_DEV_SECRETS=1`，才会用 0600 明文开发文件。
 - `config.json` 不含密钥，用户 ID 只写在仓库外的 `config.json`；示例只用占位符。
 - 控制端点的 nonce 每次运行重新生成，写在 0600 的 `control.json`，退出时删除。
@@ -341,24 +355,27 @@ Windows 上的数值待实测。内部吞吐（≥ 20k ev/s）未单独压测。
 5. `<external>` 包裹引用、转发、附件：目前只有 turn frame 的来源标签加 persona 规则。
 6. 单写者分组提交：目前每次写都是一个 `db.Update`。持久写吞吐（≥ 2,000/s）未测。
 7. 按伙伴覆盖 `stranger_guard`（`bots[].stranger_guard`）：目前只有全局开关。
-8. `ungated_ok` 以及"无阻塞回调的模式禁止启动"的显式检查：adapter 本身从不使用这些模式。
-9. `allowed_recipients`，以及 `plexus_post` 的收件人审批：`plexus_post` 只能发到当前线程，所以不需要。
+8. `allowed_recipients`，以及 `plexus_post` 的收件人审批：`plexus_post` 只能发到当前线程，所以不需要。
 
 **做法不同**：
 
 1. **Codex 拒绝陌生人**通过 `GuestLock=Unsupported` 统一实现，ACP 同理。
 2. **本机 IPC** 是单独的 127.0.0.1 控制端口加 `control.json`（nonce），不是设置页上的 `/ipc/*` 和 `run.json`。
 3. **ready 行**打印在 **stderr**（原设计是 stdout），这样 stdout 可以留给 `detect` 等命令输出 JSON。
-4. **Claude 的危险操作**直接在 PreToolUse hook 里阻塞等待，没有改为 `permissionDecision:"ask"` 再转交 `can_use_tool`。
+4. **危险操作暂挂**：回调立即 deny（`已暂挂，等 Sin 批准`），Sin 批准后同一调用重新发起时放行一次；不阻塞回调、不挂起整轮。Claude 没有改为 `permissionDecision:"ask"` 再转交 `can_use_tool`。
 5. **陌生人的 Claude 轮次**没有切换到 `plan` 模式，而是由 hook 对每个工具调用做判断：只允许工作目录内只读和 `plexus_post`。
 6. **Bucket 划分**：`revoked` 代替 `stops`；`inflight` 并入 `sessions`；`handoffs` 代替 `tasks` / `delegations`；新增 `origins`。
 7. **`config.json` 字段**：`owners`（数组）代替 `owner`；保留 `bots[].extra_deny`（陌生人不可读的额外路径）。
 8. **审批卡**用 Slack Block Kit 按钮；文本回复也算 Sin 的决定。
 9. 保留了 `dsh_acp` 作为 DSH 的 ACP 兜底条目，默认使用原生 `dsh` adapter。
+10. **陌生人级别**是 `chat`（不再是 `readonly`）：不写、不执行、不联网抓取；工作目录内只读仍允许。
+11. **会话命令推迟**：v0.1 没有 `/plexus sessions`、attach、take、fork、release。CLI 只有 `setup` / `run` / `detect` / `stop` / `install-task` 和 `--version`。
+12. **分类器只看命令**，看不到脚本内部；Codex `applyPatch` 的路径不分类；HEAD 是否已推送按 workdir 判断，不看 `-C`。
+13. **提问**以文本发帖，不是按钮。
 
 ## 11. 风险与开放问题
 
-1. DSH bridge 插件还没写（协议见 `DSH_BRIDGE.md`）；DSH 是 developer preview，可能有破坏性变更。
+1. DSH bridge 插件由 adapter 工程师另行编写，尚未放进 `bridge/` 槽位（协议见 `DSH_BRIDGE.md`）；DSH 是 developer preview，可能有破坏性变更。
 2. 在可信轮次里，伙伴读到的网页或文件中可能藏有提示注入，Plexus 无法逐条拦截。被注入的伙伴还能凭伙伴身份指挥其他伙伴。陌生人轮次与可信轮次共用原生会话。
 3. Claude 的 hook、SDK MCP、steer 格式，Codex 的 `dynamicTools`、`turn/steer`、只读访问参数、`untrusted` 策略，都只对 fake 测过。
 4. Codex 提升权限的沙箱进程是否仍在 Job 内；Job Object 在进程刚启动、尚未加入 Job 时的竞态窗口。

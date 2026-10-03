@@ -100,26 +100,60 @@ Plexus 只是一层薄桥，不自己做 agent 循环。各 harness 保留自己
   - 身份只看 Slack 的 `user` / `bot_id`，与 `owners` 和各伙伴的 Slack 用户 ID 比对。
 - **陌生人边界是唯一的边界。** 默认开启，可在设置页关闭。
   - 陌生人指既不是你、也不是伙伴的人，包括其他 App 和 workflow。
-  - 陌生人的消息只能换来对话：这一轮在 harness 原生层锁定（**GuestLock**），只能读工作目录内的文件。各 harness 的锁定方式：
+  - 陌生人的消息只能换来对话：核心以 `chat` 级别下发这一轮，每个适配器都必须用 harness 的原生锁（**GuestLock**）执行它，不允许任何写入或执行。可以读工作目录内的文件，但不能联网抓取、委派、交付或叫停。各 harness 的锁定方式：
     - Claude：每个工具调用都会触发 PreToolUse hook，除工作目录内只读和 `plexus_post` 外一律拒绝。
-    - DSH：`level: readonly`，由 bridge 插件执行。
-    - **Codex 和 ACP 没有硬性的原生锁**：只读沙箱下，"安全"命令不经询问就会执行。所以边界开启时，这些伙伴对陌生人只回一句"I can only take requests from my team here."，不启动任何轮次。
+    - DSH：prompt 上带 `level: "chat"` 和 `guest: true`，由 bridge 插件执行。
+    - **Codex 和 ACP 没有硬性的原生锁**：只读沙箱下，"安全"命令不经询问就会执行。所以它们直接不理陌生人：边界开启时只回一句"I can only take requests from my team here."，不启动任何轮次。
   - 伙伴发的消息，继承它发出时所在轮次的信任来源。来源未知时按陌生人处理（fail closed）。
 - **危险操作必须由你点击批准。** 这是唯一的审批关口。
-  - 伙伴执行以下操作前，原生权限回调会阻塞，线程里出现带 **Approve / Deny** 按钮的审批卡：
-    - 强推或改写历史：`git push --force/-f/--force-with-lease/+ref/--mirror/--delete`、`filter-branch`/`filter-repo`/bfg、HEAD 已推送时的 `rebase`/`reset`/`commit --amend`；
+  - 分类器**只有一个**，用 Go 写。所有适配器（包括 DSH）的每个工具调用都先经 `harness.Normalize` 补全类型、命令和路径，再交给它判断。
+  - 它拦截以下操作：
+    - 强推或改写历史：`git push --force/-f/--force-with-lease/+ref/--mirror/--delete`（`push` 前带 `git -C dir`、`git -c k=v` 等全局参数也算）、`filter-branch`/`filter-repo`/bfg、HEAD 已推送时的 `rebase`/`reset`/`commit --amend`；
     - 删除工作目录以外的文件；
     - 注册表、服务、计划任务、系统目录、机器级环境变量、安装程序；
-    - 邮件、webhook，以及名字像发消息的 MCP 工具。
+    - 邮件、webhook，以及名字像发消息的 MCP 工具；
+    - Plexus 读不到命令内容的 shell 调用（`exec.opaque`）。
+  - **暂挂。** 只挂起这一个调用，不挂起整轮：
+    - 权限回调立即拒绝这个调用，理由是 `已暂挂，等 Sin 批准`。伙伴可以继续做别的，或结束这一轮。
+    - 线程里出现带 **Approve / Deny** 按钮的审批卡。
+    - 你批准后，伙伴再次发起**完全相同**的调用时放行，**只放行一次**。Plexus 会告诉伙伴可以重试。
   - **只有你本人的点击算数。** 也可以在线程里回复 `approve` / `批准` / `deny` / `拒绝`。
-  - 没有超时；拒绝或 stop 都会结束等待。
-  - 重启后，待批卡片原地更新，不会重新发帖。重启后才给的批准，记为一次性的预批准：同一个调用重新发起时直接放行，只放行一次。
+  - 重启后，待批卡片原地更新，不会重新发帖。stop 会把待批卡片变为拒绝。
   - 在 `config.json` 里调整：
     ```json
     "dangerous_actions": {"use_defaults": true, "disable": ["git.rewrite"],
                           "extra_commands": ["^terraform apply"], "extra_mcp_tools": ["deploy"]}
     ```
   - 剩余缺口：Plexus 只能看到命令这一层，看不到脚本内部做什么（`./deploy.sh`、`make release`）。git alias 或 hook 也可能把普通 `git push` 变成强推。
+
+## 启动伙伴前的检查
+
+Plexus 启动每个伙伴前都会检查：
+
+- **访客锁。** 陌生人边界开启时，harness 要么在原生层锁住陌生人的轮次（Claude、DSH），要么直接不理陌生人（Codex、ACP）。如果某个 harness 会接收陌生人消息、却没有原生访客锁，这个伙伴**拒绝启动**，日志里写明原因。
+- **审批关口。** harness 必须有阻塞式的权限回调，否则危险操作关口守不住。如果你愿意自担风险，可以在 `bots[]` 里给这个伙伴设 `"ungated_ok": true`。
+- **`ungated_ok` 只豁免审批关口，从不豁免访客锁。**
+
+## 与桌面应用共用会话
+
+你也可以在 Claude Desktop、Codex 应用或 DSH 里打开同一个会话。Plexus 绝不往别处正在使用的对话里写东西。
+
+- **每次续接前**都会检查会话是否在别处活跃：
+  - Claude：`~/.claude/sessions/*.json` 里有存活进程持有该会话，或者 Plexus 上次使用之后、最近 2 分钟内对话记录有改动。
+  - Codex：app-server 报告存在另一个活跃写入者。
+  - DSH：会话租约被占用。
+- 如果在别处活跃，Plexus 只发一次："⏸️ I did not resume this conversation… Close it there (or let it go idle), then send your message again."
+- **工作目录记录。** `<数据目录>/locks/workdir-<hash>.lock` 记录哪个伙伴在哪个目录工作。它只在日志里给出警告，从不独占：多个伙伴可以共用一个仓库。
+- **空闲卸载。** 线程 5 分钟没有动静，harness 进程就退出（仍有后台任务时除外）。空闲的伙伴不保留 harness 进程。下一条消息按保存的会话 ID 续接。
+- Plexus 从不使用桌面版的 DSH profile 或 `dsh.cmd`，而是用自己的 `plexus` profile 启动 DSH。
+- `sessions`、attach、take、fork、release 等命令推迟到以后的版本。
+
+## 凭据
+
+- DPAPI 里**只存 Plexus 自己的 Slack token**（`xapp`、`xoxb`）。
+- Slack OAuth 的 client secret 只在设置期间存在内存里，最多 10 分钟。
+- Plexus 从不存储、注入或清理 harness 的凭据。各 harness 用自己的登录。
+- Plexus 只从 harness 的环境变量里移除 `CLAUDECODE` 和 `CLAUDE_CODE_SIMPLE`。看起来像认证信息的环境变量值会登记到日志脱敏器，从不写进日志。
 
 ## 叫停
 
@@ -184,11 +218,11 @@ ACP 伙伴没有宿主工具，也没有 GuestLock：只回应 @，它的文本�
   - 真实 Windows：Job Object 强杀、DPAPI、计划任务、隐藏窗口。
   - 真实 Slack：Socket Mode、消息 metadata、交互按钮、OAuth 回调。
   - 真实 harness。
-- **Claude Code：** PreToolUse hook、`mcp_message` SDK MCP、`stop_task`、排队输入方式的 steer。
+- **Claude Code：** PreToolUse hook、`mcp_message` SDK MCP、`stop_task`、排队输入方式的 steer，以及续接检查所依赖的 `~/.claude/sessions/*.json` 记录格式。
 - **Codex：**
-  - `dynamicTools`（experimental）、`turn/steer`、只读访问参数的格式、`untrusted` 审批策略。
+  - `dynamicTools`（experimental）、`turn/steer`、只读访问参数的格式、`untrusted` 审批策略、"另一个活跃写入者"的确切报错文字。
   - 提升权限的沙箱进程是否仍在 Job 内。
-- **DSH：** bridge 插件**还没写**，契约见 [docs/DSH_BRIDGE.md](docs/DSH_BRIDGE.md)。
+- **DSH：** bridge 插件另行编写，**本构建没有打包**。`internal/adapters/dsh/bridge/` 是留给它的空槽位，契约见 [docs/DSH_BRIDGE.md](docs/DSH_BRIDGE.md)。DSH 需要 Node ≥22.19。
 - **Gemini CLI：** ACP 启动参数。
 - **密钥：** DPAPI 绑定的是你的 Windows 用户，以你身份运行的任何进程都能解密，包括完全受信的伙伴。
 

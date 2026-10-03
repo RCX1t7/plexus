@@ -96,26 +96,60 @@ clarity and traceability. **It is not an authorization mechanism.**
   `owners` and the partners' Slack user IDs.
 - **Stranger guard.** This is the only boundary (on by default; switch it off on the setup page).
   - A stranger is anyone who is neither you nor a partner, including other apps and workflows.
-  - A stranger's message only gets a conversation. The turn runs with the harness's native lock (**GuestLock**): read files inside the workdir, nothing else.
+  - A stranger's message only gets a conversation. Core sends the turn at level `chat`, and every adapter must enforce it with the harness's native lock (**GuestLock**): nothing that writes or executes. Reads inside the workdir are allowed, but no fetches, delegation, deliveries or stops.
   - Claude: a PreToolUse hook fires on every tool call, and Plexus denies everything except workdir reads and `plexus_post`.
-  - DSH: `level: readonly` (bridge plugin).
-  - **Codex and ACP have no hard native lock**: in read-only sandboxes, they run "safe" commands without asking. With the guard on, these partners reply *"I can only take requests from my team here."* and run no turn.
+  - DSH: `level: "chat"` and `guest: true` on the prompt (bridge plugin).
+  - **Codex and ACP have no hard native lock**: in read-only sandboxes, they run "safe" commands without asking. So they ignore strangers outright. With the guard on, these partners reply *"I can only take requests from my team here."* and run no turn.
   - A partner's message inherits trust from the turn it was posted from. If that origin is unknown, Plexus fails closed.
 - **Dangerous actions need your click.** This is the only approval gate.
-  - Before a partner runs one of the following, it posts an approval card (**Approve / Deny**) in the thread and the native permission callback blocks:
-    - force push or history rewrite (`git push --force/-f/--force-with-lease/+ref/--mirror/--delete`, `filter-branch`/`filter-repo`/bfg, `rebase`/`reset`/`commit --amend` when HEAD is already pushed);
+  - Plexus has **one** classifier, written in Go. Every adapter, DSH included, sends each tool call through it, after `harness.Normalize` fills in the call's kind, command and paths.
+  - The classifier stops these:
+    - force push or history rewrite (`git push --force/-f/--force-with-lease/+ref/--mirror/--delete`, also with global flags such as `git -C dir` or `git -c k=v` before `push`; `filter-branch`/`filter-repo`/bfg; `rebase`/`reset`/`commit --amend` when HEAD is already pushed);
     - deleting files outside the workdir;
     - registry, service, scheduled-task, system-directory, machine-environment or installer changes;
-    - mail, webhooks, and MCP tools that look like they send messages.
+    - mail, webhooks, and MCP tools that look like they send messages;
+    - a shell call whose command Plexus cannot read (`exec.opaque`).
+  - **Parking.** Only that one call is suspended, never the whole turn:
+    - The permission callback denies the call at once with `已暂挂，等 Sin 批准` ("parked, waiting for Sin's approval"). The partner carries on with other work or ends its turn.
+    - Plexus posts an approval card (**Approve / Deny**) in the thread.
+    - After you approve, the identical call is allowed **once** when the partner issues it again. Plexus tells the partner it may retry.
   - **Only your click counts.** You can also reply `approve` / `批准` / `deny` / `拒绝` in the thread.
-  - There is no timeout. A deny or a stop ends the wait.
-  - Pending cards survive a restart. They are updated in place and never reposted. An approval given after a restart becomes a one-time pre-approval for the identical call.
+  - Pending cards survive a restart. They are updated in place and never reposted. A stop turns them into denies.
   - Tune the gate in `config.json`:
     ```json
     "dangerous_actions": {"use_defaults": true, "disable": ["git.rewrite"],
                           "extra_commands": ["^terraform apply"], "extra_mcp_tools": ["deploy"]}
     ```
   - Plexus sees commands, not what scripts do inside (`./deploy.sh`, `make release`). Git aliases or hooks can also turn a plain `git push` into a force push.
+
+## Starting a partner
+
+Plexus checks each partner before it starts it:
+
+- **Guest lock.** With the stranger guard on, the harness must either lock strangers' turns natively (Claude, DSH) or ignore strangers outright (Codex, ACP). If a harness would accept strangers without a native guest lock, the partner **refuses to start**, and the log says why.
+- **Approval gate.** The harness needs a blocking permission callback, otherwise the dangerous-action gate cannot hold. Set `"ungated_ok": true` on that partner in `bots[]` to run it anyway at your own risk.
+- **`ungated_ok` waives only the approval gate, never the guest lock.**
+
+## Sharing sessions with the desktop apps
+
+You may also open the same sessions in Claude Desktop, the Codex app or DSH. Plexus never writes into a conversation that is live somewhere else.
+
+- **Before every resume**, Plexus checks whether the session is active elsewhere:
+  - Claude: a live process in `~/.claude/sessions/*.json` holds the session, or its transcript changed in the last 2 minutes after Plexus last used it.
+  - Codex: the app-server reports another active writer.
+  - DSH: the session lease is held.
+- If the session is active elsewhere, Plexus posts once: *"⏸️ I did not resume this conversation… Close it there (or let it go idle), then send your message again."*
+- **Workdir notes.** `<data dir>/locks/workdir-<hash>.lock` records which partner works where. It is only a warning in the log, never an exclusive lock: partners may share a repo.
+- **Idle unload.** A thread's harness process exits after 5 minutes without traffic, unless background tasks are still running. Idle partners keep no harness process alive. The next message resumes the session from its saved ID.
+- Plexus never uses the desktop DSH profile or `dsh.cmd`. It launches DSH with its own `plexus` profile.
+- `sessions`, attach, take, fork and release commands are deferred to a later version.
+
+## Credentials
+
+- DPAPI holds **only Plexus's own Slack tokens** (`xapp`, `xoxb`).
+- The Slack OAuth client secret lives only in memory, for at most 10 minutes during setup.
+- Plexus never stores, injects or scrubs harness credentials. Each harness uses its own login.
+- The only environment variables Plexus removes from a harness's environment are `CLAUDECODE` and `CLAUDE_CODE_SIMPLE`. Values of auth-looking variables are registered with the log redactor and never logged.
 
 ## Stop
 
@@ -173,9 +207,9 @@ checked by whoever delegated to them.
 These parts are implemented against the vendors' published docs and tested only against fakes:
 
 - **Platforms:** real Windows (Job Object kill, DPAPI, the logon task, hidden console), real Slack (Socket Mode, message metadata, interactivity buttons, OAuth redirect), real harnesses.
-- **Claude Code:** the PreToolUse hook, the `mcp_message` SDK MCP server, `stop_task`, and steering via queued input.
-- **Codex:** `dynamicTools` (experimental), `turn/steer`, the read-only access shape, and the `untrusted` approval policy. Whether its elevated sandbox stays inside the Job Object.
-- **DSH:** the bridge plugin is **not written yet** (contract: [docs/DSH_BRIDGE.md](docs/DSH_BRIDGE.md)).
+- **Claude Code:** the PreToolUse hook, the `mcp_message` SDK MCP server, `stop_task`, steering via queued input, and the `~/.claude/sessions/*.json` record format used by the resume check.
+- **Codex:** `dynamicTools` (experimental), `turn/steer`, the read-only access shape, the `untrusted` approval policy, and the exact error text for "another active writer". Whether its elevated sandbox stays inside the Job Object.
+- **DSH:** the bridge plugin is written separately and is **not bundled** in this build. `internal/adapters/dsh/bridge/` is the empty slot it drops into (contract: [docs/DSH_BRIDGE.md](docs/DSH_BRIDGE.md)). DSH needs Node ≥22.19.
 - **ACP:** the Gemini CLI ACP flag.
 - **Tokens:** DPAPI ties tokens to your Windows user, so any process running as you, including a fully trusted partner, can decrypt them.
 

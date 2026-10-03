@@ -1,22 +1,28 @@
 # DSH bridge protocol (Go side), protocol version 1
 
 This document is the contract between Plexus (`internal/adapters/dsh`) and the
-DSH-side bridge plugin. **The plugin itself (TypeScript) is not in this
-repository yet.** `internal/adapters/dsh/plugin/files/` only holds a placeholder
-README. When the plugin is written, its built files (ideally one minified
-`plexus-bridge.min.js` plus a manifest) go into that directory. `go:embed` then
-bundles them into `plexus.exe`, which has plenty of room under the 25 MiB size
-gate. The setup page's "Install DSH plugin" button writes them to
-`<DSH_HOME>/plugins/plexus-bridge/`. `DSH_HOME` defaults to `~/.dsh`.
+DSH-side bridge plugin. **The plugin (TypeScript, about 37 KB built) is written
+separately and is not in this repository.** `internal/adapters/dsh/bridge/` is
+the slot for it and only holds a README. The built file goes there as
+`plexus-bridge.min.mjs`. `go:embed` then bundles it into `plexus.exe`, which has
+plenty of room under the 25 MiB size gate.
+
+- **Install location:** the setup page's "Install the plugin" button, and every
+  DSH session start, write it to `<DSH_HOME>/profiles/plexus/` (`InstallAt`,
+  atomic, only when changed). `DSH_HOME` defaults to `~/.dsh`
+  (`%USERPROFILE%\.dsh` on Windows). Other profiles are never touched (DSH
+  Desktop owns `profiles/desktop`).
+- **Node:** DSH needs Node ≥22.19 (the plugin states `^22.19 || >=24`). Plexus
+  checks the version before it starts DSH.
 
 Everything here is **UNVERIFIED** against a real DSH. Only the Go side and its
 fake (`internal/fakes/rpc.go`, mode `dsh`) are tested.
 
 ## Transport
 
-- **Launch:** Plexus starts DSH as `node <npm root>/@deepseek-ai/dsh/lib/bin.js --profile plexus [bots[].args…]`
-  with the partner's workdir as cwd.
-  - It never starts the `.cmd` shim. `PLEXUS_DSH_EXE` or `bots[].exe` overrides the path.
+- **Launch:** Plexus starts DSH as `node <npm root>/@deepseek-ai/dsh/lib/bin.js --profile plexus [--patch <DSH_HOME>/profiles/plexus/plexus.patch.yml] [bots[].args…]`
+  with the partner's workdir as cwd. `--patch` is added only when the plugin ships that overlay.
+  - It never starts a `.cmd` shim: not npm's, and never DSH Desktop's `dsh.cmd` or its profile. `PLEXUS_DSH_EXE` or `bots[].exe` overrides the path.
   - The process runs in a Job Object (Windows) or process group, and `Close` kills the whole tree.
 - **Profile:** the `plexus` profile must load the bridge plugin, and the plugin must take over stdio.
   Whether this happens in a profile file or a plugin hook is the plugin's business.
@@ -32,7 +38,7 @@ fake (`internal/fakes/rpc.go`, mode `dsh`) are tested.
 |---|---|---|
 | `plexus.initialize` | `{protocol: 1, client: {name: "plexus", version}}` | `{protocol: 1}`. A different number makes Plexus refuse the session. |
 | `plexus.session.open` | `{cwd, persona, resume, tools}` | `{sessionId}` |
-| `plexus.prompt` | `{sessionId, text, level}` | `{turnId}`, returned **immediately**. The turn then streams `plexus.event`. |
+| `plexus.prompt` | `{sessionId, text, level, guest}` | `{turnId}`, returned **immediately**. The turn then streams `plexus.event`. |
 | `plexus.cancel` | `{sessionId}` | `{}`. Interrupts the running turn. |
 | `plexus.steer` | `{sessionId, text}` | `{}`. Folds `text` into the running turn (a new message arrived while it was working). |
 | `plexus.stopTask` | `{sessionId, taskId}` | `{}`. Stops one background job by the `name` it reported. |
@@ -55,11 +61,11 @@ fake (`internal/fakes/rpc.go`, mode `dsh`) are tested.
 
 - `full`: a turn from Sin or a partner. All of DSH's tools are available.
   - Every tool call still goes through `plexus.permission`. That is how the dangerous-action gate works.
-- `readonly`: a stranger's turn (the stranger guard is on). This is the **GuestLock**.
-  - The bridge must deny every tool except reading files inside `cwd`, and `plexus_post`.
+- `chat`: a stranger's turn (the stranger guard is on). This is the **GuestLock**. `guest` is `true`.
+  - Nothing that writes or executes. The bridge must deny every tool except reading files inside `cwd`, and `plexus_post`.
   - Lock it at DSH's native permission layer, not only by prompt.
   - Plexus also denies non-read requests in `plexus.permission`, but the native lock is what makes this hold for tools that skip the callback.
-- `chat`: no tools at all.
+- `readonly`: reserved (read files inside `cwd`). Core does not send it today.
 
 `text` already has the turn frame prepended (who sent it: Sin, partner or stranger,
 plus the thread and task id). Send it to the model verbatim.
@@ -96,11 +102,13 @@ The params are a `harness.Event`, plus the bridge's own `turnId`:
 
 Reply with `{allow, optionId, always, reason}`.
 
-- **The bridge must block the tool call until the reply arrives, with no timeout.**
-  - A dangerous action waits for Sin's click on an approval card, which may take hours.
-  - If DSH itself times out, treat it as a deny.
-- **`kind`:** one of `read`, `write`, `shell`, `fetch`, `ask`, `meta`, `other`.
-  - Fill `command` for shell calls and `paths` for file calls. The dangerous-action classifier reads exactly these fields. Missing fields mean the gate cannot see the call.
+- **Plexus answers at once.** It never holds the callback open.
+  - A dangerous action is **parked**: the reply is `allow:false` with reason `已暂挂，等 Sin 批准`. The turn goes on.
+  - After Sin approves on the approval card, the identical call is allowed **once** when the model issues it again.
+  - If DSH itself times out on a reply, treat it as a deny.
+- **One classifier.** The dangerous-action classifier is Plexus's Go code (`internal/danger`), the same one every adapter uses. The plugin does not need its own.
+  - `kind` (`read`, `write`, `shell`, `fetch`, `ask`, `meta`, `other`), `command` and `paths` are optional. When they are missing, Plexus derives them from `name` and `input` (`harness.Normalize`).
+  - A shell call whose command Plexus cannot read is treated as dangerous (`exec.opaque`).
 - **Coverage:** the hook must fire for **every** tool call, including the ones DSH would auto-allow. Otherwise neither the stranger guard nor the approval gate can see them.
 
 ### `plexus.question` (request)
@@ -121,6 +129,15 @@ Reply with `{allow, optionId, always, reason}`.
 - Reply with `{text, isError}`.
 - `id` must be unique per call. Plexus uses it for idempotent Slack posts.
 
+## Session lease (Desktop coexistence)
+
+If `plexus.session.open` with `resume` fails because another process holds the
+session (an error mentioning a lease, a lock, an active writer, "in use" or
+"already open"), Plexus maps it to `harness.ErrActiveElsewhere`. It then posts
+once in the thread that it did not resume the conversation, and writes nothing
+to it. Idle sessions are closed after 5 minutes, so Plexus does not hold a
+lease while idle.
+
 ## Turn rules
 
 - One turn at a time per session. While a turn runs, Plexus may send `plexus.steer` any number of times.
@@ -132,3 +149,19 @@ Reply with `{allow, optionId, always, reason}`.
 `PermissionCallback`, `AskUser`, `BackgroundTasks`, `Subagents`, `Resume`,
 `Interrupt`, `SystemPrompt`, `Control`, `PerTaskStop`, `HostTools`, `GuestLock`:
 all `Native` **if** the plugin implements this document.
+
+## Differences from the plugin's PLUGIN-PROTOCOL.md (rebase notes)
+
+The plugin draft (`plexus-team/adapters/dsh-plugin/`) will be rebased onto this
+skeleton. These are the points where the two sides differ today:
+
+| Point | Plugin draft | Go side here |
+|---|---|---|
+| `plexus.session.close` `{sessionId}` | defined | not sent yet; idle unload and stop close the process instead |
+| `plexus.shutdown` `{}` | defined (process exits 0) | not sent yet; `Close` kills the process tree |
+| `plexus.request.cancelled` `{sessionId, id}` (notify) | sent when DSH aborts a pending permission, question or tool | ignored (unknown notification) |
+| `tool` in `plexus.permission` | `{call_id, name, input}` | accepted; `kind`/`command`/`paths` are derived via `harness.Normalize` |
+| `plexus.tool` params | `{sessionId, turnId, id, parentId, guest, tool}` | reads top-level `{id, name, arguments}`; needs aligning |
+| `plexus.initialize` | extra `raw`, `stream`, `forward`; returns `services`, `capabilities` | sends `{protocol, client}`; checks only `protocol` |
+| `-32007 SafetyGateUnavailable` | refuses every prompt (fail closed) | surfaces as a turn error |
+
