@@ -72,9 +72,13 @@ type DetectionResult struct {
 type Level int
 
 const (
-	LevelChat     Level = iota // no tools
-	LevelReadOnly              // read files inside the workdir
-	LevelFull                  // everything the harness can do
+	// LevelChat is a stranger's turn: conversation only. Every adapter
+	// must keep it from writing files, running commands or using the
+	// network; the policy callback may still allow filtered reads of
+	// ordinary files inside the workdir.
+	LevelChat     Level = iota
+	LevelReadOnly       // read files inside the workdir
+	LevelFull           // everything the harness can do
 )
 
 func (l Level) String() string {

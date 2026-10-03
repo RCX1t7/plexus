@@ -55,7 +55,7 @@ func (p Policy) Restricted(a Authority) bool { return p.StrangerGuard && a.Sourc
 // Level is the native sandbox hint for a turn (defense in depth).
 func (p Policy) Level(a Authority) harness.Level {
 	if p.Restricted(a) {
-		return harness.LevelReadOnly
+		return harness.LevelChat // strangers: conversation, never write or execute
 	}
 	return harness.LevelFull
 }

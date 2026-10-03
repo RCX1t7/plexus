@@ -66,6 +66,10 @@ func (r Rules) disabled(rule string) bool {
 func Classify(c Call, x Ctx, r Rules) *Hit {
 	var hits []*Hit
 	if r.defaults() {
+		if c.Kind == harness.ToolShell && strings.TrimSpace(c.Command) == "" && !r.disabled("exec.opaque") {
+			// an execute call whose command the adapter could not read
+			hits = append(hits, &Hit{"exec.opaque", "runs a command Plexus cannot see (" + c.Name + ")"})
+		}
 		for _, seg := range Segments(c.Command) {
 			hits = append(hits, classifyArgv(seg, x))
 		}

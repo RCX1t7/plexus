@@ -623,8 +623,10 @@ func toolRequest(name string, in map[string]any) harness.ToolRequest {
 		r.Kind, r.Paths = harness.ToolRead, []string{firstNonEmpty(str("path"), ".")}
 	case "Write", "Edit", "MultiEdit", "NotebookEdit":
 		r.Kind, r.Paths = harness.ToolWrite, nonEmpty(str("file_path"), str("notebook_path"))
-	case "Bash", "BashOutput", "KillShell", "KillBash", "PowerShell":
+	case "Bash", "PowerShell":
 		r.Kind, r.Command = harness.ToolShell, str("command")
+	case "BashOutput", "KillShell", "KillBash": // read / stop a shell Plexus already let run
+		r.Kind = harness.ToolMeta
 	case "WebFetch", "WebSearch":
 		r.Kind = harness.ToolFetch
 	case "AskUserQuestion":

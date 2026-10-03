@@ -213,6 +213,10 @@ func (h *Hub) StartBots(ctx context.Context, cfg *config.Config) {
 			h.Log.Error("partner uses an unknown harness", "partner", b.Name, "harness", b.Harness)
 			continue
 		}
+		if err := StartCheck(b, hn.Capabilities(), cfg.Guard()); err != nil {
+			h.Log.Error("partner not started", "partner", b.Name, "err", err.Error())
+			continue
+		}
 		want[b.Name] = true
 		if r := h.running[b.Name]; r != nil {
 			if reflect.DeepEqual(r.bot, b) && r.team == tm {

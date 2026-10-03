@@ -338,7 +338,8 @@ func (s *session) request(method string, raw json.RawMessage, reply func(any, *h
 	e := harness.Event{ID: w.ID, ParentID: w.ParentID, TurnID: s.mapTurn(w.TurnID), SessionID: s.id, Raw: raw}
 	switch method {
 	case "plexus.permission":
-		e.Perm = &harness.PermissionRequest{Tool: w.Tool, Reason: w.Reason, Options: w.Options}
+		// one classifier for all adapters: the Go core reads Kind/Command/Paths
+		e.Perm = &harness.PermissionRequest{Tool: harness.Normalize(w.Tool), Reason: w.Reason, Options: w.Options}
 		s.em.Ask(tctx, e, func(d harness.Decision) {
 			reply(map[string]any{"allow": d.Allow, "optionId": d.OptionID, "always": d.Always, "reason": d.Reason}, nil)
 		})

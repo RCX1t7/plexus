@@ -60,8 +60,8 @@ func TestStrangerOnlyReadsOrdinaryWorkdirFiles(t *testing.T) {
 			t.Fatalf("stranger %s allowed", k)
 		}
 	}
-	if p.Level(stranger) != harness.LevelReadOnly {
-		t.Fatal("stranger level must be read-only")
+	if p.Level(stranger) != harness.LevelChat {
+		t.Fatal("stranger level must be chat")
 	}
 	allowed := []string{"main.go", filepath.Join(wd, "docs", "a.md"), "."}
 	for _, path := range allowed {

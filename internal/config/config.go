@@ -27,7 +27,11 @@ type Bot struct {
 	ExtraDeny   []string `json:"extra_deny,omitempty"` // paths strangers may never have read
 	Exe         string   `json:"exe,omitempty"`        // executable override
 	Args        []string `json:"args,omitempty"`       // extra harness args (e.g. a future --bare opt-out)
-	AppID       string   `json:"app_id,omitempty"`
+	// UngatedOK lets a partner start on a harness that has no blocking
+	// permission callback, so the dangerous-action gate cannot hold (Sin's
+	// own risk). It never waives the stranger guard's lock.
+	UngatedOK bool   `json:"ungated_ok,omitempty"`
+	AppID     string `json:"app_id,omitempty"`
 }
 
 // Config is the whole file.

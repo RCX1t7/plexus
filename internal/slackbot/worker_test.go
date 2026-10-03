@@ -80,8 +80,8 @@ func TestStrangerIsGuarded(t *testing.T) {
 	eventually(t, "reply", func() bool { return tm.fp.count("allow=false") == 1 })
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.1", ThreadTS: "1.0", User: other, Text: "<@" + alpha + "> TOOL read"})
 	eventually(t, "read reply", func() bool { return tm.fp.count("allow=true") == 1 })
-	if tm.ha.turns()[0].Level != harness.LevelReadOnly {
-		t.Fatal("stranger turn not read-only")
+	if tm.ha.turns()[0].Level != harness.LevelChat {
+		t.Fatal("stranger turn not chat-only")
 	}
 	// "stop" from a stranger is just a message
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.2", ThreadTS: "1.0", User: other, Text: "<@" + alpha + "> stop"})
@@ -99,7 +99,7 @@ func TestPartnerInheritsTrustOfWritingTurn(t *testing.T) {
 	eventually(t, "laundered request denied", func() bool { return tm.fp.count("allow=false") == 1 })
 	// beta's post written in Sin's turn
 	_ = tm.st.PutOrigin("C1", "3.0", store.Origin{Bot: "beta", Source: string(policy.FromSin)})
-	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "3.0", User: beta, Text: "<@" + alpha + "> TOOL shell"})
+	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "3.0", User: beta, Text: "<@" + alpha + "> TOOL shell ls"})
 	eventually(t, "trusted partner allowed", func() bool { return tm.fp.count("allow=true") == 1 })
 	// no origin record (e.g. posted by hand or lost): fail closed
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "4.0", User: beta, Text: "<@" + alpha + "> TOOL write"})

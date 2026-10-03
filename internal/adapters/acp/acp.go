@@ -296,7 +296,7 @@ func (tc toolCall) request() harness.ToolRequest {
 	default:
 		r.Kind = harness.ToolOther
 	}
-	return r
+	return harness.Normalize(r) // e.g. an execute call whose rawInput carries argv
 }
 
 func (s *session) notify(method string, raw json.RawMessage) {

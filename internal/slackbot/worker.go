@@ -415,7 +415,9 @@ func parseAnswer(text string, q harness.Question) []string {
 }
 
 // idleClose is how long a thread's harness process stays up without traffic.
-var idleClose = 30 * time.Minute
+// Idle partners must not keep harness processes alive (one DSH session is
+// ~160 MiB); the next message resumes the session from its saved id.
+var idleClose = 5 * time.Minute
 
 func (t *thread) loop(ctx context.Context) {
 	w := t.w
