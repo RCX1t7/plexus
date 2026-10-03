@@ -1,0 +1,107 @@
+# Plexus CI: formatting, vet, race tests, cross builds, hard size gate,
+# fresh-clone build, dependency budget and a full-history secret scan.
+name: plexus-acceptance
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vet-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          check-latest: true
+      - name: gofmt
+        run: |
+          out=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$out" ]; then echo "gofmt needed on:"; echo "$out"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: direct-dependency budget
+        run: go test ./tests/deps/ -run TestDirectDependencyBudget -count=1 -v
+      - name: go test -race
+        run: go test -race ./...
+        env:
+          PLEXUS_INSECURE_DEV_SECRETS: '1'
+
+  builds-and-size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          check-latest: true
+      - name: build windows/amd64 (release) + 25 MiB gate
+        run: |
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build -trimpath -ldflags='-s -w' -o plexus-amd64.exe ./cmd/plexus
+          size=$(stat -c%s plexus-amd64.exe)
+          echo "windows/amd64 = $size bytes ($((size/1024/1024)) MiB)"
+          if [ "$size" -gt $((25*1024*1024)) ]; then
+            echo "FAIL: exceeds 25 MiB gate"; exit 1
+          fi
+      - name: build windows/arm64 (release)
+        run: |
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 \
+            go build -trimpath -ldflags='-s -w' -o plexus-arm64.exe ./cmd/plexus
+          size=$(stat -c%s plexus-arm64.exe)
+          echo "windows/arm64 = $size bytes ($((size/1024/1024)) MiB)"
+          if [ "$size" -gt $((25*1024*1024)) ]; then
+            echo "FAIL: exceeds 25 MiB gate"; exit 1
+          fi
+
+  fresh-clone-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          check-latest: true
+      # A fresh clone must build: no gitignore pattern may hide a tracked
+      # package (e.g. internal/secrets vs a stray secrets* rule).
+      - name: fresh clone + build
+        run: |
+          tmp=$(mktemp -d)
+          git clone --depth 1 "file://$PWD" "$tmp/plexus"
+          cd "$tmp/plexus"
+          test -f internal/secrets/secrets.go || { echo "internal/secrets missing from clone"; exit 1; }
+          go build ./...
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (full history)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .github/workflows/gitleaks.toml
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+
+  flaky-stress:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          check-latest: true
+      # Known-flaky (turn-start context race), owner: builder/adapter engineer.
+      # This job surfaces the flake rate; it is allowed to fail without
+      # blocking the pipeline until the race is fixed.
+      - name: codex final-answer phase race (stress)
+        continue-on-error: true
+        run: go test ./internal/adapters/codex/ -run TestFinalAnswerPhaseAndWillRetry -count=50 -race -v

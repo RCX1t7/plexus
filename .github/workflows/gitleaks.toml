@@ -1,0 +1,41 @@
+# gitleaks config for Plexus. Plexus never stores real Slack tokens in the
+# repo (they live in the OS secret store at runtime), so any token-shaped
+# string in history is a leak. Test fixtures use clearly fake IDs that these
+# allowlists permit.
+title = "plexus gitleaks"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "slack-bot-token"
+description = "Slack bot token"
+regex = '''xoxb-[0-9A-Za-z-]{10,}'''
+keywords = ["xoxb-"]
+
+[[rules]]
+id = "slack-app-token"
+description = "Slack app-level token"
+regex = '''xapp-[0-9A-Za-z-]{10,}'''
+keywords = ["xapp-"]
+
+[allowlist]
+description = "Fake IDs used by tests and docs"
+regexes = [
+  '''xoxb-FAKE[0-9A-Za-z-]*''',
+  '''xapp-FAKE[0-9A-Za-z-]*''',
+  '''xoxb-0000000000-[0-9A-Za-z-]*''',
+  '''xapp-1-FAKE[0-9A-Za-z-]*''',
+  '''(?i)ANTHROPIC_API_KEY=sk-ant-FAKE[0-9A-Za-z-]*''',
+  '''(?i)OPENAI_API_KEY=sk-FAKE[0-9A-Za-z-]*''',
+  '''(?i)DEEPSEEK_API_KEY=sk-FAKE[0-9A-Za-z-]*''',
+]
+paths = [
+  '''tests/.*''',
+  '''docs/VERIFICATION\.md''',
+  # Pre-existing unit-test fixtures that intentionally use token-shaped fakes
+  # (redaction tests must contain token-looking strings). Not real secrets.
+  '''internal/redact/redact_test\.go''',
+  '''internal/slackbot/outbox_test\.go''',
+  '''internal/.*_test\.go''',
+]
