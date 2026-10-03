@@ -1,0 +1,8 @@
+*.db
+config.json
+secrets*
+!internal/secrets/
+.env
+plexus.exe
+/plexus
+*.log

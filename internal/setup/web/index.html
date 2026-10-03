@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Plexus setup</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font:15px/1.5 system-ui,sans-serif;max-width:900px;margin:2em auto;padding:0 1em;color:#1d2b3a}
+h1{margin-bottom:0} .sub{color:#667;margin-top:0}
+.card{border:1px solid #d5dbe3;border-radius:10px;padding:1em 1.2em;margin:1em 0}
+.ok{color:#18794e} .no{color:#b42318} .muted{color:#667}
+label{display:block;margin:.5em 0 .2em;font-weight:600}
+input[type=text],input[type=password],select{width:100%;padding:.45em;box-sizing:border-box}
+button,.btn{background:#1d4ed8;color:#fff;border:0;border-radius:6px;padding:.5em 1em;cursor:pointer;text-decoration:none;display:inline-block}
+.msg{background:#eef6ff;border-radius:6px;padding:.6em 1em}
+table{border-collapse:collapse;width:100%} td,th{text-align:left;padding:.3em .5em;border-bottom:1px solid #eee}
+ol li{margin:.3em 0}
+</style></head><body>
+<h1>Plexus</h1><p class="sub">Your coding agents as Slack partners — one Slack app per partner.</p>
+{{if .Msg}}<p class="msg">{{.Msg}}</p>{{end}}
+
+<div class="card"><h2>Detected harnesses</h2>
+<table><tr><th>Harness</th><th>Installed</th><th>Version</th><th>Logged in</th></tr>
+{{range .Detected}}<tr><td>{{.Harness}}</td><td>{{if .Installed}}<span class="ok">yes</span>{{else}}<span class="muted">no</span>{{end}}</td>
+<td>{{.Version}}</td><td>{{.LoggedIn}}</td></tr>{{end}}</table>
+<p class="muted">Detection only runs <code>--version</code> and checks whether login files exist. No model request is made.</p></div>
+
+{{$base := .Base}}
+<div class="card"><h2>You and your team</h2>
+<form method="post" action="{{$base}}team">
+<label>Your Slack user ID(s) — Sin (comma separated, e.g. U0123ABCD)</label>
+<input type="text" name="owners" value="{{.Owners}}" placeholder="Slack profile → ⋮ → Copy member ID">
+<p class="muted">You and all partners trust each other fully: any partner may ask, delegate to, review or help any other, no approvals.</p>
+<label><input type="checkbox" name="stranger_guard" {{if .Guard}}checked{{end}}> Stranger guard (recommended)</label>
+<p class="muted">People who are neither you nor a partner can talk with partners and get help, but their messages can only make a partner read ordinary files in its workdir — never run commands, write files or use the network. A partner's message counts as a stranger's when the turn that wrote it was started by a stranger.</p>
+<p><button type="submit">Save</button></p></form></div>
+
+{{range .Bots}}
+<div class="card"><h2>Partner {{.DisplayName}} <span class="muted">({{.Harness}})</span></h2>
+<p>Bot token: {{if .HasBot}}<span class="ok">stored</span>{{else}}<span class="no">missing</span>{{end}} ·
+App token: {{if .HasApp}}<span class="ok">stored</span>{{else}}<span class="no">missing</span>{{end}}</p>
+{{if not (and .HasBot .HasApp)}}
+<ol>
+<li><a class="btn" href="{{.CreateURL}}" target="_blank" rel="noopener">Create the Slack app</a> — pick your workspace, check the prefilled manifest, click <b>Create</b>.</li>
+<li>In the new app: <b>Basic Information → App-Level Tokens → Generate</b>, add scope <code>connections:write</code>, copy the <code>xapp-</code> token below. (Slack offers no API for this token, so this copy is the one manual step.)</li>
+<li><b>Install App → Install to Workspace</b>, then copy the <b>Bot User OAuth Token</b> (<code>xoxb-</code>) below — or use the OAuth button further down.</li>
+</ol>{{end}}
+<form method="post" action="{{$base}}bot">
+<input type="hidden" name="name" value="{{.Name}}">
+<label>Workdir</label><input type="text" name="workdir" value="{{.Workdir}}">
+<label><input type="checkbox" name="enabled" {{if .Enabled}}checked{{end}}> Enabled</label>
+<label>App-Level Token (xapp-…)</label><input type="password" name="app_token" autocomplete="off" placeholder="{{if .HasApp}}stored — leave empty to keep{{end}}">
+<label>Bot User OAuth Token (xoxb-…)</label><input type="password" name="bot_token" autocomplete="off" placeholder="{{if .HasBot}}stored — leave empty to keep{{end}}">
+<p><button type="submit">Save</button></p></form>
+{{if and .CanOAuth (not .HasBot)}}
+<details><summary>Install with OAuth instead of copying the bot token</summary>
+<form method="post" action="{{$base}}oauth/start"><input type="hidden" name="name" value="{{.Name}}">
+<p class="muted">From <b>Basic Information → App Credentials</b>. Kept in memory for 10 minutes only.</p>
+<label>Client ID</label><input type="text" name="client_id">
+<label>Client Secret</label><input type="password" name="client_secret" autocomplete="off">
+<p><button type="submit">Install to workspace</button></p></form></details>{{end}}
+</div>
+{{end}}
+
+{{if .DSH}}<div class="card"><h2>DSH bridge plugin</h2>
+{{if .DSHBundled}}<form method="post" action="{{$base}}dsh-plugin"><p>DSH needs the small Plexus bridge plugin bundled in this build.</p>
+<p><button type="submit">Install the plugin</button></p></form>
+{{else}}<p class="muted">This build does not include the DSH bridge plugin yet; the DSH partner will not start until it does.</p>{{end}}</div>{{end}}
+
+<div class="card"><h2>Stop a task</h2>
+<p class="muted">In Slack, reply <code>stop</code> or <code>停</code> in the task's thread. Here, enter the task id (<code>channel:ts</code> of the message that started it, shown in the logs).</p>
+<form method="post" action="{{$base}}stop"><label>Task id</label>
+<input type="text" name="task_id"><p><button type="submit">Stop now</button></p></form>
+{{if .Revoked}}<p class="muted">Recently stopped: {{range .Revoked}}<code>{{.}}</code> {{end}}</p>{{end}}</div>
+<p class="muted">This page is only reachable from this computer and only with its one-time link. Slack tokens are encrypted with Windows DPAPI for your user account; they never go into the config file or the logs. (Partners run as your user, so a partner with full trust could read them — see the README.)</p>
+</body></html>
