@@ -209,3 +209,8 @@ func DetectAll(ctx context.Context, env Env) []DetectionResult {
 	}
 	return out
 }
+
+// ErrActiveElsewhere is returned (wrapped) by StartSession when the native
+// session to resume is open in another process: a desktop app, a terminal
+// CLI, or another agent. Plexus then does not resume it.
+var ErrActiveElsewhere = errors.New("this session is open in another app")

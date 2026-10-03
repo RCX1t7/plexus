@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/RCX1t7/plexus/internal/adapters/dsh"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -353,10 +354,4 @@ func (h *Hub) prune(ctx context.Context) {
 	}
 }
 
-func dshHome() string {
-	if d := os.Getenv("DSH_HOME"); d != "" {
-		return d
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".dsh")
-}
+func dshHome() string { return dsh.DSHHome(harness.OSEnv()) }

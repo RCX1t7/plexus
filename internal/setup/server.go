@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RCX1t7/plexus/internal/adapters/dsh/plugin"
+	"github.com/RCX1t7/plexus/internal/adapters/dsh"
 	"github.com/RCX1t7/plexus/internal/config"
 	"github.com/RCX1t7/plexus/internal/harness"
 	"github.com/RCX1t7/plexus/internal/secrets"
@@ -177,13 +177,13 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	if s.Store != nil {
 		revoked, _ = s.Store.Revocations(20)
 	}
-	dsh := false
+	hasDSH := false
 	for _, d := range s.Detected {
-		dsh = dsh || (d.Harness == "dsh" && d.Installed)
+		hasDSH = hasDSH || (d.Harness == "dsh" && d.Installed)
 	}
 	_ = page.Execute(w, map[string]any{"Bots": bots, "Detected": s.Detected, "Base": "/s/" + s.pathToken + "/",
 		"Revoked": revoked, "Msg": r.URL.Query().Get("msg"), "Owners": strings.Join(s.Config.Owners, ", "),
-		"Guard": s.Config.Guard(), "DSH": dsh, "DSHBundled": plugin.Bundled()})
+		"Guard": s.Config.Guard(), "DSH": hasDSH, "DSHBundled": dsh.Bundled()})
 }
 
 func (s *Server) back(w http.ResponseWriter, r *http.Request, msg string) {
@@ -370,14 +370,10 @@ func (s *Server) stop(w http.ResponseWriter, r *http.Request) {
 
 // installDSH installs the DSH bridge plugin bundled in this build.
 func (s *Server) installDSH(w http.ResponseWriter, r *http.Request) {
-	if !plugin.Bundled() {
-		s.back(w, r, "this build does not include the DSH bridge plugin yet")
-		return
-	}
-	dir, err := plugin.Install(s.DSHHome)
+	res, err := dsh.InstallAt(s.DSHHome)
 	if err != nil {
 		s.back(w, r, "plugin install failed: "+err.Error())
 		return
 	}
-	s.back(w, r, "DSH bridge plugin installed in "+dir)
+	s.back(w, r, "DSH bridge plugin installed in "+res.ProfileDir)
 }

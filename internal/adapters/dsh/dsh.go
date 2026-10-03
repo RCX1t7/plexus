@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,19 +56,37 @@ func (Adapter) Capabilities() harness.Capabilities {
 		PerTaskStop: n, HostTools: n, GuestLock: n} // via the bridge plugin: UNVERIFIED
 }
 
-// Detect runs `dsh --version` and checks DSH's documented credential
-// sources (env, %DSH_HOME%\.credentials.yaml, %DSH_HOME%\.env) for
-// existence only. A key in <cwd>\.env is not looked at, so "unknown" is
-// reported rather than "no" when nothing is found.
+// Detect finds DSH's JS entry (never a .cmd shim, never DSH Desktop's
+// copy), checks Node.js (>= MinNode), runs `node bin.js --version`, and
+// checks DSH's credential sources (env, %DSH_HOME%\.credentials.yaml,
+// %DSH_HOME%\.env) for existence only. Plexus never reads or passes the key:
+// DSH uses its own login. A key in <cwd>\.env is not looked at, so
+// "unknown" is reported rather than "no" when nothing is found.
 func (a Adapter) Detect(ctx context.Context, env harness.Env) harness.DetectionResult {
 	r := harness.DetectionResult{Harness: a.Name(), Caps: a.Capabilities(), LoggedIn: harness.LoginUnknown}
-	r.Path = harness.FindExecutable(env, env.Getenv("PLEXUS_DSH_EXE"), lookup)
-	if r.Path == "" {
+	p, why := find(env)
+	if p == "" {
 		r.LoggedIn = harness.LoginNo
+		r.Error = why
 		return r
 	}
-	r.Installed = true
-	if v, err := env.RunVersion(ctx, r.Path, "--version"); err == nil {
+	r.Path, r.Installed = p, true
+	exe, args := p, []string{"--version"}
+	if isJS(p) {
+		node, err := findNode(env, p)
+		if err != nil {
+			r.Error = err.Error()
+			return r
+		}
+		nv, err := checkNode(ctx, env, node)
+		r.Evidence = append(r.Evidence, "node:"+nv)
+		if err != nil {
+			r.Error = err.Error()
+			return r
+		}
+		exe, args = node, []string{p, "--version"}
+	}
+	if v, err := env.RunVersion(ctx, exe, args...); err == nil {
 		r.Version = harness.FirstLine(v)
 	} else {
 		r.Error = "version check failed"
@@ -76,25 +95,49 @@ func (a Adapter) Detect(ctx context.Context, env harness.Env) harness.DetectionR
 		r.LoggedIn = harness.LoginYes
 		r.Evidence = append(r.Evidence, "env:DEEPSEEK_API_KEY")
 	}
-	home := env.Getenv("DSH_HOME")
-	if home == "" {
-		home = filepath.Join(env.Home, ".dsh")
-	}
+	home := DSHHome(env)
 	for _, f := range []string{".credentials.yaml", ".env"} {
 		if env.Exists(filepath.Join(home, f)) {
 			r.LoggedIn = harness.LoginYes
 			r.Evidence = append(r.Evidence, "file:.dsh/"+f)
 		}
 	}
+	if !Bundled() {
+		r.Error = firstNonEmpty(r.Error, "this build does not include the DSH bridge plugin yet")
+	} else if env.Exists(filepath.Join(home, "profiles", ProfileName, pluginFile)) {
+		r.Evidence = append(r.Evidence, "file:.dsh/profiles/"+ProfileName+"/"+pluginFile)
+	}
 	return r
 }
 
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
 func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (harness.Session, error) {
+	env := harness.OSEnv()
 	exe := o.Exe
 	if exe == "" {
-		exe = a.Detect(ctx, harness.OSEnv()).Path
+		var why string
+		if exe, why = find(env); exe == "" {
+			return nil, errors.New(firstNonEmpty(why, "dsh not found"))
+		}
 	}
-	p, err := harness.StartProc(ctx, exe, append([]string{"--profile", "plexus"}, o.Args...), o.Workdir, o.Env)
+	home := DSHHome(env)
+	args := []string{"--profile", ProfileName}
+	if Bundled() {
+		r, err := InstallAt(home) // idempotent refresh of the plexus profile
+		if err != nil {
+			return nil, fmt.Errorf("install the DSH bridge plugin: %w", err)
+		}
+		if env.Exists(r.PatchPath) {
+			args = append(args, "--patch", r.PatchPath)
+		}
+	}
+	p, err := harness.StartProc(ctx, exe, append(args, o.Args...), o.Workdir, o.Env)
 	if err != nil {
 		return nil, err
 	}
@@ -124,6 +167,9 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	}
 	if err := s.rpc.Call(cctx, "plexus.session.open", map[string]any{"cwd": o.Workdir,
 		"persona": o.Persona, "resume": o.ResumeID, "tools": tools}, &res); err != nil {
+		if o.ResumeID != "" && isActiveElsewhere(err) {
+			return fail(fmt.Errorf("%w: %v", harness.ErrActiveElsewhere, err))
+		}
 		return fail(fmt.Errorf("dsh session open: %w", err))
 	}
 	s.id = res.SessionID
@@ -195,7 +241,7 @@ func (s *session) Send(ctx context.Context, t harness.Turn) (string, error) {
 	var res struct {
 		TurnID string `json:"turnId"`
 	}
-	if err := s.rpc.Call(tctx, "plexus.prompt", map[string]any{"sessionId": s.id, "text": t.Text, "level": t.Level.String()}, &res); err != nil {
+	if err := s.rpc.Call(tctx, "plexus.prompt", map[string]any{"sessionId": s.id, "text": t.Text, "level": t.Level.String(), "guest": t.Level != harness.LevelFull}, &res); err != nil {
 		s.turn.End(id)
 		return "", err
 	}
@@ -308,5 +354,18 @@ func (s *session) request(method string, raw json.RawMessage, reply func(any, *h
 	}
 }
 
-// lookup: DSH ships no native exe; run its JS entry with node, not dsh.cmd.
+// lookup: DSH ships no native exe; run its JS entry with node, never a
+// dsh.cmd (npm's or DSH Desktop's).
 var lookup = harness.Lookup{Names: []string{"dsh"}, Npm: []string{"@deepseek-ai/dsh/lib/bin.js"}}
+
+// isActiveElsewhere maps the bridge's session-lease error (one live writer
+// per DSH session) to "open in another DSH: DSH Desktop or a CLI".
+func isActiveElsewhere(err error) bool {
+	l := strings.ToLower(err.Error())
+	for _, k := range []string{"lease", "locked", "active writer", "in use", "another process", "already open"} {
+		if strings.Contains(l, k) {
+			return true
+		}
+	}
+	return false
+}
