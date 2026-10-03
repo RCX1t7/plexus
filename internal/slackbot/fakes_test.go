@@ -29,6 +29,7 @@ type posted struct {
 	Channel, Thread, Text string
 	Meta                  Meta
 	TS                    string
+	Updated               bool
 }
 
 func (p *fakePoster) Post(_ context.Context, ch, th, text string, m Meta) (string, error) {
@@ -40,12 +41,25 @@ func (p *fakePoster) Post(_ context.Context, ch, th, text string, m Meta) (strin
 	}
 	p.seq++
 	ts := fmt.Sprintf("9%d.000", p.seq)
-	p.posts = append(p.posts, posted{ch, th, text, m, ts})
+	p.posts = append(p.posts, posted{Channel: ch, Thread: th, Text: text, Meta: m, TS: ts})
 	if p.history == nil {
 		p.history = map[string]string{}
 	}
 	p.history[m.RequestID] = ts
 	return ts, nil
+}
+
+func (p *fakePoster) Update(_ context.Context, ch, ts, text string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range p.posts {
+		if p.posts[i].TS == ts && p.posts[i].Channel == ch {
+			p.posts[i].Text = text
+			p.posts[i].Updated = true
+			return nil
+		}
+	}
+	return errors.New("message_not_found")
 }
 
 func (p *fakePoster) Find(_ context.Context, _, _, id string) (string, bool, error) {
@@ -229,7 +243,7 @@ func (s *fakeSess) Send(ctx context.Context, t harness.Turn) (string, error) {
 		case len(f) > 1 && f[0] == "TOOL":
 			got := make(chan harness.Decision, 1)
 			s.emit(harness.Event{Kind: harness.EventPermission, TurnID: id,
-				Perm:   &harness.PermissionRequest{Tool: harness.ToolRequest{Name: f[1], Kind: harness.ToolKind(f[1])}},
+				Perm:   &harness.PermissionRequest{Tool: harness.ToolRequest{CallID: "call-" + id, Name: f[1], Kind: harness.ToolKind(f[1]), Command: strings.Join(f[2:], " ")}},
 				Decide: func(d harness.Decision) { got <- d }})
 			d := <-got
 			s.mu.Lock()

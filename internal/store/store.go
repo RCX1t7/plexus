@@ -35,6 +35,7 @@ var (
 	bOrigins   = []byte("origins")
 	bHandoffs  = []byte("handoffs")
 	bQuestions = []byte("questions")
+	bApprovals = []byte("approvals")
 )
 
 // ErrNotFound is returned for missing records.
@@ -54,7 +55,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bOutbox, bSeen, bRevoked, bSessions, bOrigins, bHandoffs, bQuestions} {
+		for _, b := range [][]byte{bOutbox, bSeen, bRevoked, bSessions, bOrigins, bHandoffs, bQuestions, bApprovals} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -98,6 +99,7 @@ type Msg struct {
 	HandoffID                               string // handoff record carried by this message, if any
 	State, SlackTS, Error                   string
 	Created                                 int64
+	Blocks                                  json.RawMessage `json:"blocks,omitempty"` // Block Kit (approval buttons)
 }
 
 // Enqueue stores a message unless its request id exists. The boolean
@@ -487,4 +489,107 @@ func (s *Store) Prune(age time.Duration) error {
 		}
 		return nil
 	})
+}
+
+// Approval states.
+const (
+	ApprovalPending  = "pending"
+	ApprovalApproved = "approved" // approved by Sin; if the host request is gone, a one-time pre-approval
+	ApprovalDenied   = "denied"
+	ApprovalStopped  = "stopped" // denied by a stop
+	ApprovalConsumed = "consumed"
+)
+
+// Approval is one dangerous-action request waiting for (or decided by) Sin.
+type Approval struct {
+	AID       string `json:"aid"`
+	Bot       string `json:"bot"`
+	Thread    string `json:"thread"` // channel:thread_ts
+	Channel   string `json:"channel"`
+	ThreadTS  string `json:"thread_ts"`
+	Root      string `json:"root"`
+	Rule      string `json:"rule"`
+	Reason    string `json:"reason"`
+	CallFP    string `json:"call_fp"`
+	Summary   string `json:"summary"`
+	CardID    string `json:"card_id"` // outbox request id of the card
+	State     string `json:"state"`
+	DecidedBy string `json:"decided_by,omitempty"`
+	Created   int64  `json:"created"`
+	Decided   int64  `json:"decided,omitempty"`
+}
+
+// PutApproval stores a new approval request.
+func (s *Store) PutApproval(a Approval) error {
+	if a.Created == 0 {
+		a.Created = s.ts()
+	}
+	return s.db.Update(func(tx *bolt.Tx) error { return put(tx, bApprovals, a.AID, a) })
+}
+
+// GetApproval loads one approval.
+func (s *Store) GetApproval(aid string) (Approval, bool, error) {
+	var a Approval
+	var ok bool
+	err := s.db.View(func(tx *bolt.Tx) error { a, ok = get[Approval](tx, bApprovals, aid); return nil })
+	return a, ok, err
+}
+
+// DecideApproval moves a pending approval to state; it reports false if the
+// approval was not pending (already decided, stopped or unknown).
+func (s *Store) DecideApproval(aid, state, by string) (Approval, bool, error) {
+	var a Approval
+	changed := false
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		v, ok := get[Approval](tx, bApprovals, aid)
+		if !ok || v.State != ApprovalPending {
+			a = v
+			return nil
+		}
+		v.State, v.DecidedBy, v.Decided = state, by, s.ts()
+		a, changed = v, true
+		return put(tx, bApprovals, aid, v)
+	})
+	return a, changed, err
+}
+
+// Approvals lists approvals in state (all bots if bot is "").
+func (s *Store) Approvals(bot, state string) ([]Approval, error) {
+	var out []Approval
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bApprovals).ForEach(func(_, v []byte) error {
+			var a Approval
+			if json.Unmarshal(v, &a) == nil && (bot == "" || a.Bot == bot) && a.State == state {
+				out = append(out, a)
+			}
+			return nil
+		})
+	})
+	return out, err
+}
+
+// ConsumePreApproval finds an approved (not yet used) request with the same
+// call fingerprint in this thread and marks it consumed.
+func (s *Store) ConsumePreApproval(bot, thread, fp string) (bool, error) {
+	found := false
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bApprovals)
+		var key []byte
+		var hit Approval
+		_ = b.ForEach(func(k, v []byte) error {
+			var a Approval
+			if key == nil && json.Unmarshal(v, &a) == nil && a.Bot == bot && a.Thread == thread &&
+				a.CallFP == fp && a.State == ApprovalApproved {
+				key, hit = append([]byte(nil), k...), a
+			}
+			return nil
+		})
+		if key == nil {
+			return nil
+		}
+		found = true
+		hit.State = ApprovalConsumed
+		return put(tx, bApprovals, string(key), hit)
+	})
+	return found, err
 }

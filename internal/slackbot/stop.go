@@ -86,6 +86,7 @@ func (t *thread) softStop(ctx context.Context) {
 	if q != nil && q.ev.Answer != nil {
 		q.ev.Answer(nil)
 	}
+	t.w.cancelApprovals(t)
 	if s != nil {
 		ictx, done := context.WithTimeout(ctx, StopGrace)
 		if ts, ok := s.(harness.TaskStopper); ok {

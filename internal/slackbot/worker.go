@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/RCX1t7/plexus/internal/config"
+	"github.com/RCX1t7/plexus/internal/danger"
 	"github.com/RCX1t7/plexus/internal/handoff"
 	"github.com/RCX1t7/plexus/internal/harness"
 	"github.com/RCX1t7/plexus/internal/policy"
@@ -89,9 +90,13 @@ type Worker struct {
 	OriginWait time.Duration
 	// Options lets tests inject executables / env for harness sessions.
 	Options harness.SessionOptions
+	// Danger is the dangerous_actions config (Sin's approval gate).
+	Danger danger.Rules
 
-	mu      sync.Mutex
-	threads map[string]*thread
+	mu        sync.Mutex
+	threads   map[string]*thread
+	seq       int
+	approvals approvals
 }
 
 type thread struct {
@@ -184,6 +189,9 @@ func (w *Worker) Handle(ctx context.Context, in Inbound) {
 
 	// Owner controls: an exact "stop"/"停" in a thread, or "plexus stop <task-id>".
 	if auth.Source == policy.FromSin {
+		if in.ThreadTS != "" && w.approvalReply(ctx, key, in) {
+			return
+		}
 		if in.ThreadTS != "" && isStop(in.Text) {
 			go w.stopTree(context.WithoutCancel(ctx), w.rootOf(key), in)
 			return
@@ -591,6 +599,9 @@ func (w *Worker) decide(t *thread, j job, ev harness.Event) {
 	d := w.Policy.Decide(j.auth, ev.Perm.Tool)
 	w.log().Info("tool decision", "tool", ev.Perm.Tool.Name, "kind", ev.Perm.Tool.Kind,
 		"allow", d.Allow, "reason", d.Reason, "source", j.auth.Source)
+	if w.gate(t, j, ev, d) {
+		return // waits for Sin's approval (no timeout); the turn keeps streaming
+	}
 	ev.Decide(d)
 }
 
@@ -750,6 +761,7 @@ func (w *Worker) observe(ev harness.Event) {
 // Recover resumes turns interrupted by a crash and retires questions whose
 // harness process is gone. Called once after connecting.
 func (w *Worker) Recover(ctx context.Context) {
+	w.recoverApprovals(ctx)
 	if qs, err := w.Store.OpenQuestions(w.Bot.Name); err == nil {
 		for _, q := range qs {
 			_ = w.Store.SetQuestionState(q.Thread, q.Bot, q.QID, store.QuestionLost)

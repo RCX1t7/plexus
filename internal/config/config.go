@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/RCX1t7/plexus/internal/adapters/acp"
+	"github.com/RCX1t7/plexus/internal/danger"
 	"github.com/RCX1t7/plexus/internal/harness"
 )
 
@@ -44,6 +45,8 @@ type Config struct {
 	// https://slack.com/api/); Socket Mode's apps.connections.open uses it
 	// too. For tests against a fake Slack.
 	SlackAPIURL string `json:"slack_api_url,omitempty"`
+	// DangerousActions tunes the actions that need Sin's approval first.
+	DangerousActions danger.Rules `json:"dangerous_actions"`
 }
 
 // Guard reports whether the stranger guard is on.

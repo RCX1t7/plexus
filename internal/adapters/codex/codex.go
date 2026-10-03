@@ -67,7 +67,9 @@ func sandboxFor(l harness.Level, workdir string) (approval string, policy map[st
 	restricted := map[string]any{"type": "restricted", "includePlatformDefaults": true, "readableRoots": []string{workdir}}
 	switch l {
 	case harness.LevelFull:
-		return "on-request", map[string]any{"type": "workspaceWrite", "writableRoots": []string{workdir}, "networkAccess": true}
+		// "untrusted": every command Codex does not consider safe asks
+		// Plexus first, so the dangerous-action gate sees it.
+		return "untrusted", map[string]any{"type": "workspaceWrite", "writableRoots": []string{workdir}, "networkAccess": true}
 	case harness.LevelReadOnly:
 		return "untrusted", map[string]any{"type": "readOnly", "access": restricted}
 	default:

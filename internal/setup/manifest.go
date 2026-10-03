@@ -1,6 +1,6 @@
 // Package setup is the local onboarding page: detected harnesses, one-click
 // "create Slack app from manifest" links, token collection into the OS
-// secret store, Owner / member-level settings and task revocation.
+// secret store, Sin's user id, the stranger guard and stopping tasks.
 package setup
 
 import (
@@ -34,7 +34,7 @@ func Manifest(displayName, harness string, port int) map[string]any {
 		},
 		"settings": map[string]any{
 			"event_subscriptions":    map[string]any{"bot_events": []string{"message.channels", "message.groups", "message.im", "message.mpim"}},
-			"interactivity":          map[string]any{"is_enabled": false},
+			"interactivity":          map[string]any{"is_enabled": true}, // approval buttons (delivered over Socket Mode)
 			"org_deploy_enabled":     false,
 			"socket_mode_enabled":    true,
 			"token_rotation_enabled": false,

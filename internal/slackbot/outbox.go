@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -18,8 +19,9 @@ import (
 // Meta rides in the Slack message metadata, so a post can be found again
 // after a crash (reconciliation) without trusting local state.
 type Meta struct {
-	RequestID string `json:"request_id"`
-	Kind      string `json:"kind"`
+	RequestID string          `json:"request_id"`
+	Kind      string          `json:"kind"`
+	Blocks    json.RawMessage `json:"-"` // optional Block Kit layout (not metadata)
 }
 
 // Poster posts to Slack and can look a post up again by request id.
@@ -28,6 +30,8 @@ type Poster interface {
 	// Find searches the thread (or channel) history for a message carrying
 	// requestID in its metadata.
 	Find(ctx context.Context, channel, threadTS, requestID string) (ts string, found bool, err error)
+	// Update replaces the text of an earlier post and removes its buttons.
+	Update(ctx context.Context, channel, ts, text string) error
 }
 
 // Outcome classifies a failed post.
@@ -109,6 +113,7 @@ type Post struct {
 	Kind                      string // reply, post, handoff, deliver, stop_ack, ask, warn
 	Origin                    string // trust source of the turn that wrote it
 	HandoffID                 string
+	Blocks                    json.RawMessage
 }
 
 // Enqueue stores a post (chunked) under its request id. Duplicates are
@@ -123,7 +128,7 @@ func (o *Outbox) Enqueue(p Post) ([]string, error) {
 		m := store.Msg{RequestID: id, Bot: o.Bot, Channel: p.Channel, ThreadTS: p.Thread, Text: c,
 			Kind: p.Kind, Origin: p.Origin}
 		if i == 0 {
-			m.HandoffID = p.HandoffID
+			m.HandoffID, m.Blocks = p.HandoffID, p.Blocks
 		}
 		fresh, err := o.Store.Enqueue(m)
 		if err != nil {
@@ -154,7 +159,7 @@ func (o *Outbox) Deliver(ctx context.Context, id string) (string, error) {
 	if err != nil || !won {
 		return m.State, err // already handled (or being handled) elsewhere
 	}
-	ts, perr := o.Poster.Post(ctx, m.Channel, m.ThreadTS, redact.String(m.Text, o.Secrets...), Meta{RequestID: id, Kind: m.Kind})
+	ts, perr := o.Poster.Post(ctx, m.Channel, m.ThreadTS, redact.String(m.Text, o.Secrets...), Meta{RequestID: id, Kind: m.Kind, Blocks: m.Blocks})
 	if perr == nil {
 		return o.sent(m, ts)
 	}
@@ -226,4 +231,17 @@ func (o *Outbox) Flush(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// Update edits the post with request id id (best effort: the post must
+// have been sent).
+func (o *Outbox) Update(ctx context.Context, id, text string) error {
+	m, err := o.Store.Get(id)
+	if err != nil {
+		return err
+	}
+	if m.SlackTS == "" {
+		return fmt.Errorf("post %s was not sent", id)
+	}
+	return o.Poster.Update(ctx, m.Channel, m.SlackTS, redact.String(text, o.Secrets...))
 }

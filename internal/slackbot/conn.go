@@ -2,6 +2,7 @@ package slackbot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,6 +20,12 @@ const metaEvent = "plexus_post"
 func (p SlackPoster) Post(ctx context.Context, channel, thread, text string, meta Meta) (string, error) {
 	opts := []slack.MsgOption{slack.MsgOptionText(text, false), slack.MsgOptionMetadata(slack.SlackMetadata{
 		EventType: metaEvent, EventPayload: map[string]any{"request_id": meta.RequestID, "kind": meta.Kind}})}
+	if len(meta.Blocks) > 0 {
+		var b slack.Blocks
+		if err := json.Unmarshal(meta.Blocks, &b); err == nil {
+			opts = append(opts, slack.MsgOptionBlocks(b.BlockSet...))
+		}
+	}
 	if thread != "" {
 		opts = append(opts, slack.MsgOptionTS(thread))
 	}
@@ -35,6 +42,12 @@ func (p SlackPoster) Post(ctx context.Context, channel, thread, text string, met
 		return "", &PostError{Outcome: Rejected, Err: err} // Slack replied: definitely not posted
 	}
 	return "", &PostError{Outcome: Uncertain, Err: err}
+}
+
+// Update replaces a post's text and drops its blocks (buttons).
+func (p SlackPoster) Update(ctx context.Context, channel, ts, text string) error {
+	_, _, _, err := p.API.UpdateMessageContext(ctx, channel, ts, slack.MsgOptionText(text, false), slack.MsgOptionBlocks())
+	return err
 }
 
 // Find looks for requestID in the metadata of the thread's replies (or the
@@ -116,6 +129,19 @@ func Run(ctx context.Context, api *slack.Client, w *Worker, onConnected func()) 
 			if evt.Type == socketmode.EventTypeConnected && onConnected != nil {
 				onConnected()
 			}
+			if evt.Type == socketmode.EventTypeInteractive {
+				if cb, ok := evt.Data.(slack.InteractionCallback); ok && cb.Type == slack.InteractionTypeBlockActions {
+					for _, a := range cb.ActionCallback.BlockActions {
+						if a.ActionID == ActionApprove || a.ActionID == ActionDeny {
+							w.Approve(ctx, a.Value, cb.User.ID, a.ActionID == ActionApprove)
+						}
+					}
+				}
+				if evt.Request != nil {
+					sm.Ack(*evt.Request)
+				}
+				continue
+			}
 			if evt.Type != socketmode.EventTypeEventsAPI {
 				continue
 			}
@@ -128,6 +154,9 @@ func Run(ctx context.Context, api *slack.Client, w *Worker, onConnected func()) 
 			}
 			if m, ok := ea.InnerEvent.Data.(*slackevents.MessageEvent); ok {
 				if m.SubType != "" && m.SubType != "bot_message" && m.SubType != "thread_broadcast" {
+					if evt.Request != nil {
+						sm.Ack(*evt.Request)
+					}
 					continue // edits, deletes, joins ...
 				}
 				user := m.User

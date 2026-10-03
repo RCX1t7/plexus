@@ -4,6 +4,7 @@ package supervisor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -56,10 +57,12 @@ type team struct {
 	Owners string
 	Guard  bool
 	API    string
+	Danger string
 }
 
 func teamOf(cfg *config.Config) team {
-	return team{Owners: fmt.Sprint(cfg.Owners), Guard: cfg.Guard(), API: cfg.SlackAPIURL}
+	d, _ := json.Marshal(cfg.DangerousActions)
+	return team{Owners: fmt.Sprint(cfg.Owners), Guard: cfg.Guard(), API: cfg.SlackAPIURL, Danger: string(d)}
 }
 
 // Open prepares the hub: config (with harness auto-detection), store,
@@ -314,7 +317,7 @@ func (h *Hub) runOnce(ctx context.Context, cfg *config.Config, b config.Bot, hn 
 		}
 	}()
 	w := &slackbot.Worker{Bot: b, Harness: hn, Store: h.Store, Outbox: ob, Policy: h.Policy(cfg, b),
-		Owners: cfg.Owners, Peers: h.Peers, Stops: h.Stops, SelfID: self,
+		Owners: cfg.Owners, Peers: h.Peers, Stops: h.Stops, SelfID: self, Danger: cfg.DangerousActions,
 		Log: h.Log.With("partner", b.Name), OriginWait: 2 * time.Second}
 	var recovered sync.Once
 	return slackbot.Run(ctx, api, w, func() {
