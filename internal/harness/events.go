@@ -39,6 +39,7 @@ type ToolRequest struct {
 	Kind    ToolKind `json:"kind"`
 	Paths   []string `json:"paths,omitempty"`   // file paths the call touches
 	Command string   `json:"command,omitempty"` // shell command, if any
+	Deletes []string `json:"deletes,omitempty"` // the subset of Paths the call deletes (or moves away)
 	Input   any      `json:"input,omitempty"`   // raw native input (display only)
 }
 

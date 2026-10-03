@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -102,5 +103,26 @@ func TestResumeOfThreadWithActiveWriterIsRefused(t *testing.T) {
 	}
 	if (Adapter{}).IdleUnload() <= 0 {
 		t.Fatal("codex threads must be unloaded when idle")
+	}
+}
+
+func TestFileChangeDeletes(t *testing.T) {
+	var it item
+	_ = json.Unmarshal([]byte(`{"type":"fileChange","id":"i1","changes":[
+		{"path":"a.go","kind":{"type":"update"}},
+		{"path":"../x.go","kind":{"type":"delete"}},
+		{"path":"/o/b.go","kind":{"type":"update","move_path":"b.go"}},
+		{"path":"c.go","kind":"delete"}]}`), &it)
+	r := itemRequest(it)
+	if strings.Join(r.Deletes, ",") != "../x.go,/o/b.go,c.go" || len(r.Paths) != 5 {
+		t.Fatalf("%+v", r)
+	}
+	r = legacyPatch(map[string]any{"fileChanges": map[string]any{
+		"../gone.txt": map[string]any{"delete": map[string]any{"content": "x"}},
+		"keep.txt":    map[string]any{"update": map[string]any{"unified_diff": "", "move_path": nil}},
+		"/o/m.txt":    map[string]any{"update": map[string]any{"move_path": "m.txt"}},
+	}})
+	if strings.Join(r.Deletes, ",") != "../gone.txt,/o/m.txt" || r.Kind != harness.ToolWrite {
+		t.Fatalf("%+v", r)
 	}
 }

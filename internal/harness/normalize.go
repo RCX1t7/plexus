@@ -35,6 +35,7 @@ func Normalize(r ToolRequest) ToolRequest {
 			}
 		}
 	}
+	patchPaths(&r, in)
 	if r.Kind == "" || r.Kind == ToolOther {
 		n := strings.ToLower(r.Name)
 		switch {
@@ -53,7 +54,85 @@ func Normalize(r ToolRequest) ToolRequest {
 			r.Kind = ToolOther
 		}
 	}
+	if r.Kind != ToolShell && r.Kind != ToolRead && deleteName(r.Name) {
+		// delete_file, fs_remove, trash, ... (MCP servers, DSH tools): every
+		// path such a tool names is deleted.
+		for _, p := range r.Paths {
+			r.Deletes = addPath(r.Deletes, p)
+		}
+	}
 	return r
+}
+
+func deleteName(name string) bool {
+	n := strings.ToLower(name)
+	for _, w := range []string{"delete", "remove", "unlink", "trash", "rmdir", "rmtree", "erase", "purge"} {
+		if strings.Contains(n, w) {
+			return true
+		}
+	}
+	for _, f := range strings.FieldsFunc(n, func(c rune) bool { return c == '_' || c == '-' || c == '.' || c == '/' }) {
+		if f == "rm" || f == "del" {
+			return true
+		}
+	}
+	return false
+}
+
+func addPath(list []string, p string) []string {
+	for _, x := range list {
+		if x == p {
+			return list
+		}
+	}
+	return append(list, p)
+}
+
+// patchPaths reads apply_patch envelopes (Codex, and any harness that
+// forwards one) in the command or the input: "*** Delete File: p" is a
+// delete, "*** Update File: p" + "*** Move to: q" moves p away (a delete
+// of p and a write of q), Add/Update are writes.
+func patchPaths(r *ToolRequest, in map[string]any) {
+	texts := []string{r.Command}
+	if s, ok := r.Input.(string); ok {
+		texts = append(texts, s)
+	}
+	for _, k := range []string{"patch", "input", "content", "diff", "changes"} {
+		if s, ok := in[k].(string); ok {
+			texts = append(texts, s)
+		}
+	}
+	for _, t := range texts {
+		if !strings.Contains(t, "*** ") {
+			continue
+		}
+		last := ""
+		for _, line := range strings.Split(t, "\n") {
+			line = strings.TrimSpace(line)
+			for _, h := range []string{"*** Delete File:", "*** Add File:", "*** Update File:", "*** Move to:"} {
+				if !strings.HasPrefix(line, h) {
+					continue
+				}
+				p := strings.TrimSpace(line[len(h):])
+				if p == "" {
+					continue
+				}
+				r.Paths = addPath(r.Paths, p)
+				switch h {
+				case "*** Delete File:":
+					r.Deletes = addPath(r.Deletes, p)
+				case "*** Move to:":
+					if last != "" {
+						r.Deletes = addPath(r.Deletes, last)
+					}
+				}
+				last = p
+			}
+		}
+		if r.Kind == "" || r.Kind == ToolOther {
+			r.Kind = ToolWrite
+		}
+	}
 }
 
 func joinArg(v any) string {

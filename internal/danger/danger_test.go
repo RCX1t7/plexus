@@ -20,7 +20,7 @@ func enc(s string) string {
 func TestClassify(t *testing.T) {
 	win := Ctx{GOOS: "windows", Workdir: `C:\Users\sin\work`}
 	pushed := win
-	pushed.HeadPushed = func() bool { return true }
+	pushed.HeadPushed = func(string) bool { return true }
 	sh := func(cmd string) Call { return Call{Kind: harness.ToolShell, Command: cmd} }
 	cases := []struct {
 		name string

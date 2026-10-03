@@ -37,10 +37,9 @@ func (w *Worker) gate(t *thread, j job, ev harness.Event, d harness.Decision) bo
 	if !d.Allow || w.Policy.Restricted(j.auth) || ev.Perm == nil {
 		return false
 	}
-	tool := ev.Perm.Tool
-	call := danger.Call{Kind: tool.Kind, Name: tool.Name, Command: tool.Command, Paths: tool.Paths}
-	hit := danger.Classify(call, danger.Ctx{GOOS: w.Policy.GOOS, Workdir: w.Policy.Workdir,
-		HeadPushed: func() bool { return headPushed(w.Policy.Workdir) }}, w.Danger)
+	tool := harness.Normalize(ev.Perm.Tool) // idempotent: fills what the adapter left out
+	call := danger.Call{Kind: tool.Kind, Name: tool.Name, Command: tool.Command, Paths: tool.Paths, Deletes: tool.Deletes, Input: tool.Input}
+	hit := danger.Classify(call, danger.Ctx{GOOS: w.Policy.GOOS, Workdir: w.Policy.Workdir, Git: runGit}, w.Danger)
 	if hit == nil {
 		return false
 	}
@@ -198,11 +197,13 @@ func (w *Worker) recoverApprovals(ctx context.Context) {
 	}
 }
 
-// headPushed reports whether HEAD is already contained in its upstream.
-func headPushed(dir string) bool {
+// runGit runs a read-only git query in dir for the classifier (targets,
+// "is HEAD pushed"). It only runs for calls that are already git rules.
+func runGit(dir string, args ...string) (string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", dir, "merge-base", "--is-ancestor", "HEAD", "@{u}")
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 	platform.HideWindow(cmd)
-	return cmd.Run() == nil
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err == nil
 }

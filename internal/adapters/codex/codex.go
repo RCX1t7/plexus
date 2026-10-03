@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -90,7 +91,7 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	if err != nil {
 		return nil, err
 	}
-	s := &session{p: p, rpc: harness.NewRPC(p, false), em: harness.NewEmitter(), workdir: o.Workdir, files: map[string][]string{}}
+	s := &session{p: p, rpc: harness.NewRPC(p, false), em: harness.NewEmitter(), workdir: o.Workdir, files: map[string]harness.ToolRequest{}}
 	p.OnDrop(func(n int64) { s.em.Emit(harness.DroppedFrame(n)) })
 	s.rpc.OnNotify = s.notify
 	s.rpc.OnRequest = s.request
@@ -163,7 +164,7 @@ type session struct {
 	last   string // last committed agentMessage text
 	final  string // agentMessage text with phase final_answer
 	errMsg string
-	files  map[string][]string // fileChange itemId -> paths
+	files  map[string]harness.ToolRequest // fileChange itemId -> paths and deletes
 }
 
 func (s *session) ID() string                   { return s.thread }
@@ -273,7 +274,9 @@ type item struct {
 	Status  string `json:"status"`
 	Command any    `json:"command"`
 	Changes []struct {
-		Path string `json:"path"`
+		Path     string          `json:"path"`
+		Kind     json.RawMessage `json:"kind"` // "delete" or {"type":"delete"} / {"type":"update","move_path":...}
+		MovePath string          `json:"move_path"`
 	} `json:"changes"`
 	Tool             string `json:"tool"`
 	Server           string `json:"server"`
@@ -352,7 +355,7 @@ func (s *session) notify(method string, raw json.RawMessage) {
 			r := itemRequest(it)
 			if it.Type == "fileChange" {
 				s.mu.Lock()
-				s.files[it.ID] = r.Paths
+				s.files[it.ID] = r
 				s.mu.Unlock()
 			}
 			e.Tool, e.Status = &r, it.Status
@@ -410,12 +413,84 @@ func itemRequest(it item) harness.ToolRequest {
 	case "fileChange":
 		r.Kind = harness.ToolWrite
 		for _, c := range it.Changes {
-			r.Paths = append(r.Paths, c.Path)
+			kind, move := changeKind(c.Kind)
+			addChange(&r, c.Path, kind, firstNonEmpty(move, c.MovePath))
 		}
 	case "webSearch":
 		r.Kind, r.Input = harness.ToolFetch, it.Query
 	default:
 		r.Kind, r.Name = harness.ToolOther, firstNonEmpty(strings.Trim(it.Server+"/"+it.Tool, "/"), it.Type)
+	}
+	return r
+}
+
+// changeKind reads a fileChange kind: "delete", {"type":"delete"} or
+// {"type":"update","move_path":"x"} (and the legacy externally tagged
+// {"delete":{...}} / {"update":{"move_path":"x"}}).
+func changeKind(raw json.RawMessage) (kind, move string) {
+	var str string
+	if json.Unmarshal(raw, &str) == nil {
+		return strings.ToLower(str), ""
+	}
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil {
+		return "", ""
+	}
+	return changeKindMap(m)
+}
+
+func changeKindMap(m map[string]any) (kind, move string) {
+	if t, ok := m["type"].(string); ok {
+		kind = strings.ToLower(t)
+	}
+	for _, k := range []string{"move_path", "movePath"} {
+		if v, ok := m[k].(string); ok {
+			move = v
+		}
+	}
+	for _, k := range []string{"add", "delete", "update"} {
+		if v, ok := m[k]; ok {
+			kind = firstNonEmpty(kind, k)
+			if inner, ok := v.(map[string]any); ok {
+				for _, mk := range []string{"move_path", "movePath"} {
+					if mv, ok := inner[mk].(string); ok {
+						move = firstNonEmpty(move, mv)
+					}
+				}
+			}
+		}
+	}
+	return kind, move
+}
+
+// addChange records one changed file: a delete, or a move (which deletes
+// the source path), adds to Deletes as well as Paths.
+func addChange(r *harness.ToolRequest, path, kind, move string) {
+	if path == "" {
+		return
+	}
+	r.Paths = append(r.Paths, path)
+	if kind == "delete" || move != "" {
+		r.Deletes = append(r.Deletes, path)
+	}
+	if move != "" {
+		r.Paths = append(r.Paths, move)
+	}
+}
+
+// legacyPatch maps applyPatchApproval's fileChanges {path: change}.
+func legacyPatch(p map[string]any) harness.ToolRequest {
+	r := harness.ToolRequest{Name: "applyPatch", Kind: harness.ToolWrite, Input: p}
+	fc, _ := p["fileChanges"].(map[string]any)
+	paths := make([]string, 0, len(fc))
+	for path := range fc {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		m, _ := fc[path].(map[string]any)
+		kind, move := changeKindMap(m)
+		addChange(&r, path, kind, move)
 	}
 	return r
 }
@@ -475,12 +550,14 @@ func (s *session) request(method string, raw json.RawMessage, reply func(any, *h
 			codexOptions, decision("accept", "acceptForSession", "decline"))
 	case "item/fileChange/requestApproval":
 		s.mu.Lock()
-		paths := append([]string(nil), s.files[env.ItemID]...)
+		known := s.files[env.ItemID]
 		s.mu.Unlock()
+		paths := append([]string(nil), known.Paths...)
 		if root, ok := p["grantRoot"].(string); ok && root != "" {
 			paths = append(paths, root)
 		}
-		ask(harness.ToolRequest{CallID: env.ItemID, Name: "fileChange", Kind: harness.ToolWrite, Paths: paths, Input: p},
+		ask(harness.ToolRequest{CallID: env.ItemID, Name: "fileChange", Kind: harness.ToolWrite, Paths: paths,
+			Deletes: append([]string(nil), known.Deletes...), Input: p},
 			codexOptions, decision("accept", "acceptForSession", "decline"))
 	case "item/permissions/requestApproval":
 		ask(harness.ToolRequest{CallID: env.ItemID, Name: "requestPermissions", Kind: harness.ToolOther, Input: p}, nil,
@@ -494,7 +571,7 @@ func (s *session) request(method string, raw json.RawMessage, reply func(any, *h
 		ask(harness.ToolRequest{Name: "execCommand", Kind: harness.ToolShell, Command: commandString(p["command"]), Input: p}, nil,
 			decision("approved", "approved_for_session", "denied"))
 	case "applyPatchApproval": // legacy v1 shape
-		ask(harness.ToolRequest{Name: "applyPatch", Kind: harness.ToolWrite, Input: p}, nil,
+		ask(legacyPatch(p), nil,
 			decision("approved", "approved_for_session", "denied"))
 	case "item/tool/requestUserInput":
 		ev := e
