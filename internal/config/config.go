@@ -24,9 +24,8 @@ type Bot struct {
 	Enabled     bool     `json:"enabled"`
 	Workdir     string   `json:"workdir"`
 	Persona     string   `json:"persona,omitempty"`
-	ExtraDeny   []string `json:"extra_deny,omitempty"` // paths strangers may never have read
-	Exe         string   `json:"exe,omitempty"`        // executable override
-	Args        []string `json:"args,omitempty"`       // extra harness args (e.g. a future --bare opt-out)
+	Exe         string   `json:"exe,omitempty"`  // executable override
+	Args        []string `json:"args,omitempty"` // extra harness args (e.g. a future --bare opt-out)
 	// UngatedOK lets a partner start on a harness that has no blocking
 	// permission callback, so the dangerous-action gate cannot hold (Sin's
 	// own risk). It never waives the stranger guard's lock.

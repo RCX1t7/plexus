@@ -53,44 +53,26 @@ func TestTrustedMayDoEverything(t *testing.T) {
 	}
 }
 
-func TestStrangerOnlyReadsOrdinaryWorkdirFiles(t *testing.T) {
+func TestStrangerGetsNoToolsButPost(t *testing.T) {
 	p, wd := setup(t)
-	for _, k := range []harness.ToolKind{harness.ToolShell, harness.ToolWrite, harness.ToolFetch, harness.ToolOther} {
-		if d := p.Decide(stranger, harness.ToolRequest{Kind: k}); d.Allow {
+	for _, k := range []harness.ToolKind{harness.ToolRead, harness.ToolShell, harness.ToolWrite, harness.ToolFetch,
+		harness.ToolOther, harness.ToolMeta, harness.ToolAsk} {
+		if d := p.Decide(stranger, harness.ToolRequest{Name: "x", Kind: k, Paths: []string{filepath.Join(wd, "main.go")}}); d.Allow {
 			t.Fatalf("stranger %s allowed", k)
+		}
+	}
+	for _, n := range []string{"plexus_post", "mcp__plexus__plexus_post"} {
+		if d := p.Decide(stranger, harness.ToolRequest{Name: n, Kind: harness.ToolMeta}); !d.Allow {
+			t.Fatalf("%s denied: %s", n, d.Reason)
+		}
+	}
+	for _, n := range []string{"mcp__plexus__plexus_delegate", "plexus_postx", "Read"} {
+		if d := p.Decide(stranger, harness.ToolRequest{Name: n, Kind: harness.ToolMeta}); d.Allow {
+			t.Fatalf("%s allowed", n)
 		}
 	}
 	if p.Level(stranger) != harness.LevelChat {
 		t.Fatal("stranger level must be chat")
-	}
-	allowed := []string{"main.go", filepath.Join(wd, "docs", "a.md"), "."}
-	for _, path := range allowed {
-		if d := p.Decide(stranger, harness.ToolRequest{Kind: harness.ToolRead, Paths: []string{path}}); !d.Allow {
-			t.Fatalf("read %s denied: %s", path, d.Reason)
-		}
-	}
-	denied := []string{".env", "config/.env.local", "prod.env", "id_rsa", "certs/server.pem", "secrets/x.txt",
-		"data/users.csv", "auth.json", "../outside.txt", filepath.Join(p.Home, ".ssh", "id_ed25519"), "/etc/passwd"}
-	for _, path := range denied {
-		if d := p.Decide(stranger, harness.ToolRequest{Kind: harness.ToolRead, Paths: []string{path}}); d.Allow {
-			t.Fatalf("read %s allowed", path)
-		}
-	}
-	// meta and ask have no side effects
-	if d := p.Decide(stranger, harness.ToolRequest{Kind: harness.ToolMeta}); !d.Allow {
-		t.Fatal("meta denied")
-	}
-}
-
-func TestSymlinkCannotEscapeWorkdir(t *testing.T) {
-	p, wd := setup(t)
-	secret := filepath.Join(p.Home, "outside.txt")
-	_ = os.WriteFile(secret, []byte("x"), 0o600)
-	if err := os.Symlink(secret, filepath.Join(wd, "link.txt")); err != nil {
-		t.Skip("symlinks unavailable")
-	}
-	if d := p.Decide(stranger, harness.ToolRequest{Kind: harness.ToolRead, Paths: []string{"link.txt"}}); d.Allow {
-		t.Fatal("symlink escape allowed")
 	}
 }
 
@@ -115,17 +97,5 @@ func TestStoppedTreeDeniedFailClosed(t *testing.T) {
 	p.Revoker = nil
 	if d := p.Decide(sin, harness.ToolRequest{Kind: harness.ToolRead}); d.Allow {
 		t.Fatal("no revoker must deny")
-	}
-}
-
-func TestWindowsPaths(t *testing.T) {
-	p := Policy{GOOS: "windows", Home: `C:\Users\sin`, Workdir: `C:\Users\sin\work`, StrangerGuard: true, Revoker: revoker{}}
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows path semantics need filepath on windows")
-	}
-	for path, want := range map[string]bool{`src\a.go`: true, `C:\Users\sin\WORK\b.txt`: true, `a.txt:secret`: false, `..\x`: false} {
-		if d := p.Decide(stranger, harness.ToolRequest{Kind: harness.ToolRead, Paths: []string{path}}); d.Allow != want {
-			t.Fatalf("%s: allow=%v want %v (%s)", path, d.Allow, want, d.Reason)
-		}
 	}
 }

@@ -79,7 +79,7 @@ func TestStrangerIsGuarded(t *testing.T) {
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.0", User: other, Text: "<@" + alpha + "> TOOL shell"})
 	eventually(t, "reply", func() bool { return tm.fp.count("allow=false") == 1 })
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.1", ThreadTS: "1.0", User: other, Text: "<@" + alpha + "> TOOL read"})
-	eventually(t, "read reply", func() bool { return tm.fp.count("allow=true") == 1 })
+	eventually(t, "read denied too", func() bool { return tm.fp.count("allow=false") == 2 })
 	if tm.ha.turns()[0].Level != harness.LevelChat {
 		t.Fatal("stranger turn not chat-only")
 	}

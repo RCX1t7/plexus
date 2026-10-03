@@ -342,7 +342,7 @@ func (h *Hub) runOnce(ctx context.Context, cfg *config.Config, b config.Bot, hn 
 func (h *Hub) Policy(cfg *config.Config, b config.Bot) policy.Policy {
 	home, _ := os.UserHomeDir()
 	return policy.Policy{GOOS: runtime.GOOS, Home: home, Workdir: b.Workdir,
-		ExtraDeny: b.ExtraDeny, StrangerGuard: cfg.Guard(), Revoker: h.Store}
+		StrangerGuard: cfg.Guard(), Revoker: h.Store}
 }
 
 // StopTask stops a task tree from outside Slack (CLI, setup page).
