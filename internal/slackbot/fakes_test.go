@@ -249,7 +249,7 @@ func (s *fakeSess) Send(ctx context.Context, t harness.Turn) (string, error) {
 			s.mu.Lock()
 			s.decisions = append(s.decisions, d)
 			s.mu.Unlock()
-			final = fmt.Sprintf("allow=%v", d.Allow)
+			final = fmt.Sprintf("allow=%v %s", d.Allow, d.Reason)
 		case len(f) > 1 && f[0] == "HOST":
 			args := map[string]any{}
 			_ = json.Unmarshal([]byte(strings.Join(f[2:], " ")), &args)

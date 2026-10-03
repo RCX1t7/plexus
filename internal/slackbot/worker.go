@@ -96,7 +96,6 @@ type Worker struct {
 	mu        sync.Mutex
 	threads   map[string]*thread
 	seq       int
-	approvals approvals
 }
 
 type thread struct {

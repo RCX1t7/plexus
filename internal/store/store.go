@@ -494,7 +494,7 @@ func (s *Store) Prune(age time.Duration) error {
 // Approval states.
 const (
 	ApprovalPending  = "pending"
-	ApprovalApproved = "approved" // approved by Sin; if the host request is gone, a one-time pre-approval
+	ApprovalApproved = "approved" // approved by Sin: the identical re-issued call passes once
 	ApprovalDenied   = "denied"
 	ApprovalStopped  = "stopped" // denied by a stop
 	ApprovalConsumed = "consumed"
@@ -536,13 +536,14 @@ func (s *Store) GetApproval(aid string) (Approval, bool, error) {
 }
 
 // DecideApproval moves a pending approval to state; it reports false if the
-// approval was not pending (already decided, stopped or unknown).
+// approval was not pending (already decided, stopped or unknown). A stop
+// (state ApprovalStopped) also ends an approved approval not yet used.
 func (s *Store) DecideApproval(aid, state, by string) (Approval, bool, error) {
 	var a Approval
 	changed := false
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		v, ok := get[Approval](tx, bApprovals, aid)
-		if !ok || v.State != ApprovalPending {
+		if !ok || !(v.State == ApprovalPending || (v.State == ApprovalApproved && state == ApprovalStopped)) {
 			a = v
 			return nil
 		}

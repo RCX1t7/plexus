@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/RCX1t7/plexus/internal/danger"
@@ -23,49 +22,17 @@ const (
 	ActionDeny    = "plexus_deny"
 )
 
-// approvals holds the live host callbacks waiting for Sin.
-type approvals struct {
-	mu   sync.Mutex
-	live map[string]liveApproval // aid -> callback
-}
-
-type liveApproval struct {
-	t      *thread
-	decide func(harness.Decision)
-}
-
-func (a *approvals) add(aid string, l liveApproval) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.live == nil {
-		a.live = map[string]liveApproval{}
-	}
-	a.live[aid] = l
-}
-
-func (a *approvals) take(aid string) (liveApproval, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	l, ok := a.live[aid]
-	delete(a.live, aid)
-	return l, ok
-}
-
-func (a *approvals) forThread(t *thread) []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	var ids []string
-	for id, l := range a.live {
-		if l.t == t {
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
+// Parked is the reason a dangerous call is denied with while it waits for
+// Sin. The callback never blocks: the call is denied at once and parked;
+// once Sin approves, the identical re-issued call is allowed (once).
+const Parked = "已暂挂，等 Sin 批准 (parked: this action needs Sin's approval in the Slack thread). " +
+	"Do not retry it now; continue with other work. Plexus will tell you when Sin decides; " +
+	"if Sin approves, re-issue exactly the same call and it will be allowed once."
 
 // gate checks a trusted turn's tool call against the dangerous-action
-// rules. It returns true when it took over the callback (an approval card
-// was posted and the call waits for Sin, with no timeout).
+// rules. It returns true when it decided the call itself: a dangerous call
+// is denied at once and parked behind an approval card (one card per
+// distinct call), unless Sin already approved this exact call.
 func (w *Worker) gate(t *thread, j job, ev harness.Event, d harness.Decision) bool {
 	if !d.Allow || w.Policy.Restricted(j.auth) || ev.Perm == nil {
 		return false
@@ -79,8 +46,16 @@ func (w *Worker) gate(t *thread, j job, ev harness.Event, d harness.Decision) bo
 	}
 	fp := danger.Fingerprint(call)
 	if ok, _ := w.Store.ConsumePreApproval(w.Bot.Name, t.key, fp); ok {
-		w.log().Info("dangerous action pre-approved by Sin", "rule", hit.Rule)
+		w.log().Info("dangerous action approved by Sin; allowing the re-issued call once", "rule", hit.Rule)
 		return false
+	}
+	ev.Decide(harness.Decision{Allow: false, Reason: Parked})
+	pending, _ := w.Store.Approvals(w.Bot.Name, store.ApprovalPending)
+	for _, a := range pending {
+		if a.Thread == t.key && a.CallFP == fp {
+			w.log().Info("dangerous action still parked", "rule", hit.Rule, "aid", a.AID)
+			return true // the card is already there
+		}
 	}
 	w.mu.Lock()
 	w.seq++
@@ -98,10 +73,9 @@ func (w *Worker) gate(t *thread, j job, ev harness.Event, d harness.Decision) bo
 	a := store.Approval{AID: aid, Bot: w.Bot.Name, Thread: t.key, Channel: t.channel, ThreadTS: t.ts, Root: j.auth.Root,
 		Rule: hit.Rule, Reason: hit.Reason, CallFP: fp, Summary: summary, CardID: aid, State: store.ApprovalPending}
 	if err := w.Store.PutApproval(a); err != nil {
-		ev.Decide(harness.Decision{Allow: false, Reason: "could not record the approval request"})
+		w.log().Error("could not record an approval request", "err", err.Error())
 		return true
 	}
-	w.approvals.add(aid, liveApproval{t: t, decide: ev.Decide})
 	text, blocks := w.approvalCard(a)
 	ids, err := w.Outbox.Enqueue(Post{ID: aid, Channel: t.channel, Thread: t.ts, Text: text, Kind: "approval",
 		Origin: string(j.auth.Source), Blocks: blocks})
@@ -110,7 +84,7 @@ func (w *Worker) gate(t *thread, j job, ev harness.Event, d harness.Decision) bo
 			_, _ = w.Outbox.Deliver(context.Background(), id)
 		}
 	}
-	w.log().Warn("dangerous action waits for Sin", "rule", hit.Rule, "aid", aid)
+	w.log().Warn("dangerous action parked until Sin decides", "rule", hit.Rule, "aid", aid)
 	return true
 }
 
@@ -119,7 +93,7 @@ func (w *Worker) approvalCard(a store.Approval) (string, json.RawMessage) {
 	if len(w.Owners) > 0 {
 		who = "<@" + w.Owners[0] + ">"
 	}
-	text := fmt.Sprintf("%s ⚠️ *%s wants to do something that needs your approval* (`%s`)\n> %s\n```%s```\n"+
+	text := fmt.Sprintf("%s ⚠️ *%s wants to do something that needs your approval* (`%s`) — 已暂挂，等 Sin 批准\n> %s\n```%s```\n"+
 		"Only Sin's click counts. You can also reply `approve` / `批准` or `deny` / `拒绝` in this thread.",
 		who, w.Bot.Name, a.Rule, a.Reason, strings.ReplaceAll(a.Summary, "```", "'''"))
 	blocks := []any{
@@ -136,7 +110,9 @@ func (w *Worker) approvalCard(a store.Approval) (string, json.RawMessage) {
 }
 
 // Approve applies Sin's decision on an approval card. Clicks or replies by
-// anyone else are ignored. It reports whether the decision was taken.
+// anyone else are ignored. It reports whether the decision was taken. The
+// partner is told the outcome in a new turn; after an approval it may
+// re-issue the identical call, which then passes once.
 func (w *Worker) Approve(ctx context.Context, aid, user string, ok bool) bool {
 	if !w.isOwner(user) {
 		w.log().Info("approval click ignored: not Sin", "user", user)
@@ -150,31 +126,20 @@ func (w *Worker) Approve(ctx context.Context, aid, user string, ok bool) bool {
 	if err != nil || !changed || a.Bot != w.Bot.Name {
 		return false
 	}
+	if stopped, _ := w.Store.AnyRevoked(a.Root); stopped {
+		return true // decided, but the task is stopped: nothing to resume
+	}
 	verdict := "❌ Denied by <@" + user + ">"
+	note := "Sin denied the parked action (" + a.Summary + "). Do not run it; continue with other work or ask Sin."
 	if ok {
 		verdict = "✅ Approved by <@" + user + "> (this one call only)"
+		note = "Sin approved the parked action (" + a.Summary + "). Re-issue exactly the same call now; it will be allowed once."
 	}
 	_ = w.Outbox.Update(ctx, a.CardID, fmt.Sprintf("%s — `%s`\n```%s```", verdict, a.Rule, a.Summary))
-	if l, live := w.approvals.take(aid); live {
-		if ok {
-			a.State = store.ApprovalConsumed // used right away by the waiting call
-			_ = w.Store.PutApproval(a)
-			l.decide(harness.Decision{Allow: true, Reason: "approved by Sin"})
-		} else {
-			l.decide(harness.Decision{Allow: false, Reason: "Sin denied this action; do not retry it, continue with other work or ask Sin"})
-		}
-		return true
-	}
-	// The host request died with a restart: an approval becomes a one-time
-	// pre-approval for the same call; tell the partner it may retry.
-	if ok {
-		key := a.Thread
-		in := Inbound{Channel: a.Channel, ThreadTS: a.ThreadTS, TS: a.ThreadTS, User: user}
-		t := w.thread(ctx, key, in)
-		t.push(ctx, job{in: Inbound{Channel: a.Channel, ThreadTS: a.ThreadTS, TS: a.AID, User: user,
-			Text: "Sin approved the action you requested before the restart (" + a.Summary + "). You may run it once now."},
-			auth: policy.Authority{Source: policy.FromSin, Root: a.Root}})
-	}
+	in := Inbound{Channel: a.Channel, ThreadTS: a.ThreadTS, TS: a.ThreadTS, User: user}
+	t := w.thread(ctx, a.Thread, in)
+	t.push(ctx, job{in: Inbound{Channel: a.Channel, ThreadTS: a.ThreadTS, TS: a.AID, User: user, Text: note},
+		auth: policy.Authority{Source: policy.FromSin, Root: a.Root}})
 	return true
 }
 
@@ -203,15 +168,18 @@ func (w *Worker) approvalReply(ctx context.Context, key string, in Inbound) bool
 	return w.Approve(ctx, newest.AID, in.User, ok)
 }
 
-// cancelApprovals denies everything thread t waits for (stop).
+// cancelApprovals ends every parked or approved-but-unused approval of
+// thread t (stop).
 func (w *Worker) cancelApprovals(t *thread) {
-	for _, aid := range w.approvals.forThread(t) {
-		a, changed, _ := w.Store.DecideApproval(aid, store.ApprovalStopped, "stop")
-		if l, ok := w.approvals.take(aid); ok {
-			l.decide(harness.Decision{Allow: false, Reason: "the task was stopped"})
-		}
-		if changed {
-			_ = w.Outbox.Update(context.Background(), a.CardID, "🛑 Cancelled by stop — `"+a.Rule+"`")
+	for _, st := range []string{store.ApprovalPending, store.ApprovalApproved} {
+		list, _ := w.Store.Approvals(w.Bot.Name, st)
+		for _, a := range list {
+			if a.Thread != t.key {
+				continue
+			}
+			if _, changed, _ := w.Store.DecideApproval(a.AID, store.ApprovalStopped, "stop"); changed {
+				_ = w.Outbox.Update(context.Background(), a.CardID, "🛑 Cancelled by stop — `"+a.Rule+"`")
+			}
 		}
 	}
 }
@@ -225,8 +193,8 @@ func (w *Worker) recoverApprovals(ctx context.Context) {
 			_ = w.Outbox.Update(ctx, a.CardID, "🛑 Cancelled by stop — `"+a.Rule+"`")
 			continue
 		}
-		_ = w.Outbox.Update(ctx, a.CardID, fmt.Sprintf("⏳ *Still waiting for Sin* (Plexus restarted) — `%s`\n```%s```\n"+
-			"Reply `approve` / `批准` or `deny` / `拒绝` here; approving lets %s run it once when it retries.", a.Rule, a.Summary, w.Bot.Name))
+		_ = w.Outbox.Update(ctx, a.CardID, fmt.Sprintf("⏳ *Still waiting for Sin* (Plexus restarted) — 已暂挂，等 Sin 批准 — `%s`\n```%s```\n"+
+			"Click below or reply `approve` / `批准` or `deny` / `拒绝` here; approving lets %s run it once when it re-issues the call.", a.Rule, a.Summary, w.Bot.Name))
 	}
 }
 
