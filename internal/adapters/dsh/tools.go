@@ -36,3 +36,44 @@ func internalKind(name string) harness.ToolKind {
 	}
 	return ""
 }
+
+// movePathArgs are path-typed argument names DSH tools use that
+// harness.Normalize does not already read (it knows file_path/filePath/path/
+// notebook_path/target/destination/paths). DSH's fs/str-replace-editor tools
+// also carry a "directory" target and move/rename "source", so we add those to
+// the typed targets after Normalize, giving the single Go classifier every
+// path a non-read call touches (CR-5). Harmless on read kinds (the classifier
+// only gates writes/shells by path); on a write/move it lets the classifier
+// see an out-of-workspace target it would otherwise miss.
+var movePathArgs = []string{"directory", "source", "old_path", "new_path", "dir", "src", "dst"}
+
+// mapTool builds the classifier-facing tool request for a DSH tool call: pin
+// DSH-internal meta tools to ToolMeta, let harness.Normalize derive
+// kind/command/paths from the name and input, then add the DSH-specific path
+// arguments Normalize does not know. This is the single place the adapter
+// shapes a DSH tool call before the core classifier sees it.
+func mapTool(tr harness.ToolRequest) harness.ToolRequest {
+	if k := internalKind(tr.Name); k != "" {
+		tr.Kind = k
+	}
+	tr = harness.Normalize(tr)
+	if in, ok := tr.Input.(map[string]any); ok {
+		for _, k := range movePathArgs {
+			p, ok := in[k].(string)
+			if !ok || p == "" {
+				continue
+			}
+			dup := false
+			for _, have := range tr.Paths {
+				if have == p {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				tr.Paths = append(tr.Paths, p)
+			}
+		}
+	}
+	return tr
+}
