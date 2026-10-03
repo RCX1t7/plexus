@@ -111,8 +111,18 @@ func Segments(cmd string) [][]string {
 	var out [][]string
 	for _, part := range splitOps(cmd) {
 		argv := Fields(part)
-		for len(argv) > 0 && strings.Contains(argv[0], "=") && !strings.HasPrefix(argv[0], "-") && !strings.ContainsAny(argv[0], `/\`) {
+		for {
+			for len(argv) > 0 && strings.Contains(argv[0], "=") && !strings.HasPrefix(argv[0], "-") && !strings.ContainsAny(argv[0], `/\`) {
+				argv = argv[1:]
+			}
+			// prefix wrappers: sudo git push --force, env A=1 rm ..., nohup ...
+			if len(argv) == 0 || !oneOf(exeName(argv[0]), "sudo", "doas", "env", "nohup", "nice", "time", "command", "exec") {
+				break
+			}
 			argv = argv[1:]
+			for len(argv) > 0 && strings.HasPrefix(argv[0], "-") {
+				argv = argv[1:]
+			}
 		}
 		if len(argv) == 0 {
 			continue

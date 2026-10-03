@@ -213,10 +213,19 @@ func TestHostToolDelegateWritesHandoff(t *testing.T) {
 	eventually(t, "refused", func() bool { return tm.fp.count("host: missing done_when") == 1 })
 }
 
+func TestStrangerTurnCannotDelegateOrDeliver(t *testing.T) {
+	tm := newTeam(t, true)
+	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.0", User: other,
+		Text: `<@` + alpha + `> HOST plexus_delegate {"to":"beta","task":"x","done_when":"y"}`})
+	eventually(t, "refused", func() bool { return tm.fp.count("outside the team") == 1 })
+	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "2.0", User: other, Text: `<@` + alpha + `> HOST plexus_post {"text":"hello"}`})
+	eventually(t, "post allowed", func() bool { return tm.fp.count("hello") == 1 })
+}
+
 func TestStopTreeHostToolOnlyForSin(t *testing.T) {
 	tm := newTeam(t, true)
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.0", User: other, Text: "<@" + alpha + "> HOST plexus_stop_tree {}"})
-	eventually(t, "refused", func() bool { return tm.fp.count("only Sin") == 1 })
+	eventually(t, "refused", func() bool { return tm.fp.count("outside the team") == 1 })
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "2.0", User: sin, Text: "<@" + alpha + "> HOST plexus_stop_tree {}"})
 	eventually(t, "ack", func() bool { return tm.fp.count(StopAck) == 1 })
 }

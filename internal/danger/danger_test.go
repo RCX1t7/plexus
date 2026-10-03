@@ -38,6 +38,8 @@ func TestClassify(t *testing.T) {
 		{"mirror", sh("git -C repo push --mirror"), win, "git.force"},
 		{"chained", sh("git add . && git commit -m x && git push -f"), win, "git.force"},
 		{"cmd /c", sh(`cmd /c "git push --force"`), win, "git.force"},
+		{"sudo", sh("sudo git push -f"), win, "git.force"},
+		{"env prefix", sh("env GIT_TRACE=1 git push --force"), win, "git.force"},
 		{"bash -c", sh(`bash -lc 'git push --force'`), win, "git.force"},
 		{"encoded", sh("powershell -NoProfile -EncodedCommand " + enc("git push --force")), win, "git.force"},
 		{"filter-repo", sh("git filter-repo --path secret --invert-paths"), win, "git.rewrite"},

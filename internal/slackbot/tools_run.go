@@ -27,7 +27,12 @@ func (w *Worker) hostTool(t *thread, j job, ev harness.Event) harness.HostResult
 	if ev.Tool != nil && ev.Tool.CallID != "" {
 		callID = ev.Tool.CallID
 	}
-	switch strings.TrimPrefix(ev.Name, "mcp__plexus__") {
+	name := strings.TrimPrefix(ev.Name, "mcp__plexus__")
+	if name != "plexus_post" && w.Policy.Restricted(j.auth) {
+		// a stranger's turn may talk, not hand off, deliver or stop
+		return fail("not available while helping someone outside the team")
+	}
+	switch name {
 	case "plexus_post":
 		var a struct {
 			Text string `json:"text"`
