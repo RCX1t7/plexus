@@ -115,6 +115,7 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	s := &session{p: p, em: harness.NewEmitter(), pending: map[string]chan map[string]any{},
 		tools: o.HostTools, tasks: map[string]bool{}}
 	s.id.Store(o.ResumeID)
+	p.OnDrop(func(n int64) { s.em.Emit(harness.DroppedFrame(n)) })
 	go s.read()
 	// perTaskStopAffordance: an interrupt then stops only the foreground
 	// turn; background agents are stopped one by one with

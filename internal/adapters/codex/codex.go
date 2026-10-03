@@ -91,6 +91,7 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 		return nil, err
 	}
 	s := &session{p: p, rpc: harness.NewRPC(p, false), em: harness.NewEmitter(), workdir: o.Workdir, files: map[string][]string{}}
+	p.OnDrop(func(n int64) { s.em.Emit(harness.DroppedFrame(n)) })
 	s.rpc.OnNotify = s.notify
 	s.rpc.OnRequest = s.request
 	go func() { s.rpc.Run(); s.exited() }()

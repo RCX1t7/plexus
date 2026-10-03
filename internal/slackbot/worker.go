@@ -734,6 +734,8 @@ func (w *Worker) background(t *thread, ev harness.Event) {
 		ev.Call(w.hostTool(t, j, ev))
 	case harness.EventExtension:
 		w.observe(ev)
+	case harness.EventError:
+		w.log().Warn("harness error", "thread", t.key, "status", ev.Status, "err", ev.Text)
 	case harness.EventBackground:
 		if !w.hostTools() && ev.TurnID == "" && strings.TrimSpace(ev.Text) != "" && !t.isStopped() {
 			w.post(t, j, RequestID(w.Bot.Name, t.key, "bg", ev.ID), "post", "🔔 "+ev.Text)
