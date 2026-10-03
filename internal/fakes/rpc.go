@@ -237,10 +237,30 @@ func acp(s *server, method string, p map[string]any) (any, *rpcErr) {
 	return nil, &rpcErr{Code: -32601, Message: "unknown " + method}
 }
 
+// dsh is the fake DeepSeek Harness bridge: a JSON-RPC peer speaking the
+// plexus.* bridge protocol (docs/DSH_BRIDGE.md). It is a stable, documented
+// test double shared by the adapter's own tests and the black-box tests in
+// tests/ (read-only). Keep the prompt vocabulary and reply shapes stable.
+//
+// plexus.initialize reports guest_lock:native and danger_gate:native, so the
+// adapter's start-up rule is satisfied. Steer the turn with plexus.prompt text:
+//
+//	<anything>            stream a text_delta, then final "echo: <text>"
+//	SLOW                  run until plexus.steer (-> "steered: <t>") or plexus.cancel
+//	HOST <name> <json>    call host tool <name>; final "host:<text>:<isError>"
+//	TOOL <kind> <path>    plexus.permission {name:"fs.read",kind,paths:[path]}; final "allow:<bool>"
+//	PERM <command...>     plexus.permission {name:"bash",kind:"shell",command}; final "gate:<bool>:<reason>"
+//	                      (drives the dangerous-action gate: e.g. "PERM git push --force")
+//	BIGFRAME              emit one oversize (>32 MiB) plexus.event, then final "after-bigframe"
+//
+// A guest turn (prompt "guest":true) denies every tool except plexus_post
+// without asking Plexus (the native guest lock), final "guest-denied:<tool>".
 func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 	switch method {
 	case "plexus.initialize":
-		return map[string]any{"protocol": 1}, nil
+		return map[string]any{"protocol": 1,
+			"capabilities": map[string]any{"guest_lock": "native", "danger_gate": "native",
+				"permission": "native", "host_tools": "native"}}, nil
 	case "plexus.session.open":
 		id := "dsh-1"
 		if r := toString(p["resume"]); r != "" {
@@ -261,31 +281,54 @@ func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 		return map[string]any{}, nil
 	case "plexus.stopTask":
 		return map[string]any{}, nil
+	case "plexus.shutdown":
+		return map[string]any{}, nil
 	case "plexus.control":
 		return map[string]any{"name": p["name"]}, nil
 	case "plexus.prompt":
 		text := lastLine(toString(p["text"]))
+		guest := p["guest"] == true
 		go func() {
 			reply := "echo: " + text
 			f := fields(text)
 			// events first: they race the prompt reply on purpose
 			s.notify("plexus.event", map[string]any{"turnId": "bt-1", "kind": "text_delta", "text": "e"})
-			if len(f) >= 1 && f[0] == "SLOW" {
+			switch {
+			case len(f) >= 1 && f[0] == "SLOW":
 				st := <-steerCh
 				if st == "\x00cancel" {
 					s.notify("plexus.event", map[string]any{"turnId": "bt-1", "kind": "error", "text": "cancelled"})
 					return
 				}
 				reply = "steered: " + st
-			}
-			if len(f) >= 2 && f[0] == "HOST" {
+			case len(f) >= 2 && f[0] == "HOST":
+				// Host tools (e.g. plexus_post) are allowed even for guests.
 				r := s.call("plexus.tool", map[string]any{"turnId": "bt-1", "id": "t1", "name": f[1], "arguments": hostArgs(f)})
 				reply = "host:" + toString(r["text"]) + ":" + toString(r["isError"])
-			}
-			if len(f) >= 3 && f[0] == "TOOL" {
+			case len(f) >= 3 && f[0] == "TOOL":
+				if guest && f[1] != "read" {
+					reply = "guest-denied:" + f[1]
+					break
+				}
 				r := s.call("plexus.permission", map[string]any{"turnId": "bt-1", "id": "p1",
 					"tool": map[string]any{"name": "fs.read", "kind": f[1], "paths": []string{f[2]}}})
 				reply = "allow:" + toString(r["allow"])
+			case len(f) >= 2 && f[0] == "PERM":
+				command := strings.TrimSpace(strings.TrimPrefix(text, "PERM"))
+				if guest {
+					// The native guest lock denies every non-read tool; plexus_post is a host tool, not this path.
+					s.notify("plexus.event", map[string]any{"turnId": "bt-1", "kind": "final", "text": "guest-denied:bash"})
+					return
+				}
+				r := s.call("plexus.permission", map[string]any{"turnId": "bt-1", "id": "p1",
+					"tool": map[string]any{"call_id": "c1", "name": "bash", "kind": "shell", "command": command}})
+				reply = "gate:" + toString(r["allow"]) + ":" + toString(r["reason"])
+			case len(f) >= 1 && f[0] == "BIGFRAME":
+				// One frame larger than the 32 MiB transport cap. A conforming
+				// reader discards it and keeps the session alive for the final.
+				s.notify("plexus.event", map[string]any{"turnId": "bt-1", "kind": "extension",
+					"name": "huge", "text": strings.Repeat("x", 33*1024*1024)})
+				reply = "after-bigframe"
 			}
 			s.notify("plexus.event", map[string]any{"turnId": "bt-1", "kind": "final", "text": reply})
 		}()
