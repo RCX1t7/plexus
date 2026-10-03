@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +55,25 @@ func TestGateAndGuestOverTheFake(t *testing.T) {
 	if fin, _ := guard.Turn(t, s, "TOOL write /etc/passwd", harness.LevelChat); fin.Text != "guest-denied:write" || asked {
 		t.Fatalf("guest lock: %q asked=%v", fin.Text, asked)
 	}
+}
+
+// TestRefusesWhenGuestLockNotNative is the fail-closed start-up rule (CR-6 /
+// SKELETON-REVIEW item 14): DSH accepts strangers, so the adapter must refuse
+// the whole session unless the bridge reports guest_lock=native. The NOGUARD
+// fake models a bridge that could not install the guest guard -- it answers
+// plexus.initialize with {protocol:1} and no capabilities. A missing/empty
+// guest_lock must be treated exactly like a non-native one: refuse.
+func TestRefusesWhenGuestLockNotNative(t *testing.T) {
+	o := fakes.Options(t, "dsh", "PLEXUS_FAKE_DSH_NOGUARD=1")
+	s, err := Adapter{}.StartSession(context.Background(), o)
+	if err == nil {
+		s.Close()
+		t.Fatal("expected StartSession to refuse when guest_lock is not native, got nil error")
+	}
+	if !strings.Contains(err.Error(), "guest lock") {
+		t.Fatalf("refusal error should mention the guest lock, got: %v", err)
+	}
+	t.Logf("refusal: %v", err)
 }
 
 func TestBridgeTurnPermissionHostToolSteer(t *testing.T) {

@@ -160,13 +160,14 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 		return fail(fmt.Errorf("dsh bridge speaks protocol %d, want %d", init.Protocol, Protocol))
 	}
 	// Start-up rule (CR-6): DSH accepts strangers, so its guest lock must be
-	// native (the plugin's tools.guard). If the plugin reports the guest lock
-	// is not native, refuse to start the whole session rather than let a
-	// stranger's turn reach write/exec tools. The guest lock is never waived by
+	// native (the plugin's tools.guard). Fail closed: refuse the whole session
+	// unless the plugin affirmatively reports guest_lock=native. A missing or
+	// empty capability means the plugin could not install the guard, so a
+	// stranger's turn could reach write/exec tools -- that is exactly the case
+	// we must refuse, not wave through. The guest lock is never waived by
 	// ungated_ok (that only waives the dangerous-action gate, decided core-side
-	// with the bot config). A plugin that reports no capabilities (e.g. the
-	// test fake) is left to fail closed per prompt (-32007).
-	if gl := init.Capabilities["guest_lock"]; gl != "" && gl != "native" {
+	// with the bot config).
+	if gl := init.Capabilities["guest_lock"]; gl != "native" {
 		return fail(fmt.Errorf("dsh bridge guest lock is not native (guest_lock=%q); DSH accepts strangers, "+
 			"so Plexus refuses to start a session it cannot lock", gl))
 	}
@@ -360,11 +361,7 @@ func (s *session) request(method string, raw json.RawMessage, reply func(any, *h
 		// DSH-internal meta tools (send_message, subagent*, job_*, ...) are
 		// pinned to ToolMeta so the classifier never mistakes them for an
 		// egress or a dangerous call (CR-5); Normalize keeps a preset kind.
-		tr := w.Tool
-		if k := internalKind(tr.Name); k != "" {
-			tr.Kind = k
-		}
-		e.Perm = &harness.PermissionRequest{Tool: harness.Normalize(tr), Reason: w.Reason, Options: w.Options}
+		e.Perm = &harness.PermissionRequest{Tool: mapTool(w.Tool), Reason: w.Reason, Options: w.Options}
 		s.em.Ask(tctx, e, func(d harness.Decision) {
 			reply(map[string]any{"allow": d.Allow, "optionId": d.OptionID, "always": d.Always, "reason": d.Reason}, nil)
 		})
