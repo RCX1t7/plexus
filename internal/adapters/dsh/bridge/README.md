@@ -1,16 +1,23 @@
-# Slot for the DSH bridge plugin
+# DSH bridge plugin (embedded)
 
-Put the built bridge here as `plexus-bridge.min.mjs` (one minified ESM file,
-about 37 KB). `go:embed` bundles this directory into `plexus.exe`.
+`plexus-bridge.min.mjs` here is the built DSH-side bridge plugin: one minified
+ESM file, zero runtime dependencies (only `node:` builtins), ~28 KB. `go:embed`
+(`//go:embed all:bridge` in install.go) bundles this directory into
+`plexus.exe`; the Windows build stays well under the 25 MiB gate.
 
 When the file is present:
 - `Bundled()` reports true.
 - The setup page's "Install the plugin" button, and every DSH session start,
-  write it to `<DSH_HOME>/profiles/plexus/` (`InstallAt`).
+  write the whole `plexus` profile (plugin + overlay + package.json + stamp) to
+  `<DSH_HOME>/profiles/plexus/` via `InstallAt` (atomic, only when changed).
 
-The adapter engineer's package (`dsh.go`, `session.go`, `install.go`, …) may
-replace this whole directory's Go files. Keep the exported names the rest of
-Plexus uses: `DSHHome`, `Install`, `InstallAt`, `Installed`, `Bundled`,
-`InstallResult`, `ProfileName`.
+Protocol: `docs/DSH_BRIDGE.md` (Go side) and the plugin's `PLUGIN-PROTOCOL.md`.
 
-Protocol: docs/DSH_BRIDGE.md.
+## Source and rebuild
+
+The plugin's TypeScript source, tests and build live outside this repo, in the
+team workspace: `plexus-team/adapters/dsh-plugin/plugin/` (`src/`, `test/`,
+`scripts/build.mjs`). Rebuild with `bun run build` there; it writes
+`plexus-bridge.min.mjs` here and checks the bundle has no non-`node:` imports.
+Keep `BridgeVersion` (install.go) and the plugin's `package.json` version in
+sync — the version stamps the profile package.json (required by DSH).
