@@ -55,7 +55,7 @@ func (Adapter) Capabilities() harness.Capabilities {
 	n := harness.Native
 	return harness.Capabilities{PermissionCallback: n, AskUser: n, BackgroundTasks: n, Subagents: n,
 		SlashCommands: n, Effort: n, Resume: n, Interrupt: n, StopHook: n, SystemPrompt: n, Control: n,
-		PerTaskStop: n, HostTools: n}
+		PerTaskStop: n, HostTools: n, GuestLock: n}
 }
 
 // Detect looks for the CLI and local login evidence only.

@@ -45,6 +45,10 @@ type Capabilities struct {
 	Control            Support `json:"control"`       // raw Control(name, payload) passthrough
 	PerTaskStop        Support `json:"per_task_stop"` // stop one background task / subagent
 	HostTools          Support `json:"host_tools"`    // Plexus tools (plexus_post ...) mounted natively
+	// GuestLock: every tool call of a stranger's turn reaches the Plexus
+	// policy (no "safe" command runs without a callback). Harnesses without
+	// it do not take strangers' messages while the stranger guard is on.
+	GuestLock Support `json:"guest_lock"`
 }
 
 // ErrUnsupported is returned by Control for unknown names.

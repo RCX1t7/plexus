@@ -52,7 +52,7 @@ func (Adapter) Capabilities() harness.Capabilities {
 	n, u := harness.Native, harness.Unsupported
 	return harness.Capabilities{PermissionCallback: n, AskUser: n, BackgroundTasks: n, Subagents: n,
 		SlashCommands: u, Effort: u, Resume: n, Interrupt: n, StopHook: u, SystemPrompt: n, Control: n,
-		PerTaskStop: n, HostTools: n} // via the bridge plugin: UNVERIFIED
+		PerTaskStop: n, HostTools: n, GuestLock: n} // via the bridge plugin: UNVERIFIED
 }
 
 // Detect runs `dsh --version` and checks DSH's documented credential

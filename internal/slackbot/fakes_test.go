@@ -97,14 +97,18 @@ func eventually(t *testing.T, what string, f func() bool) {
 
 // fakeHarness is an in-process harness scripted by the last prompt line.
 type fakeHarness struct {
-	hostTools bool
-	mu        sync.Mutex
-	sessions  []*fakeSess
+	hostTools   bool
+	noGuestLock bool
+	mu          sync.Mutex
+	sessions    []*fakeSess
 }
 
 func (h *fakeHarness) Name() string { return "fake" }
 func (h *fakeHarness) Capabilities() harness.Capabilities {
-	c := harness.Capabilities{HostTools: harness.Unsupported}
+	c := harness.Capabilities{HostTools: harness.Unsupported, GuestLock: harness.Native}
+	if h.noGuestLock {
+		c.GuestLock = harness.Unsupported
+	}
 	if h.hostTools {
 		c.HostTools = harness.Native
 	}

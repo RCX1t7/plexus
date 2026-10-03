@@ -270,3 +270,15 @@ func TestRecoverInflight(t *testing.T) {
 		t.Fatal("stale question not retired")
 	}
 }
+
+func TestNoGuestLockRefusesStrangers(t *testing.T) {
+	tm := newTeam(t, false)
+	tm.ha.noGuestLock = true // e.g. Codex: read-only sandbox still runs "safe" commands unasked
+	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.0", User: other, Text: "<@" + alpha + "> cat .env"})
+	eventually(t, "notice", func() bool { return tm.fp.count("only take requests from my team") == 1 })
+	if len(tm.ha.turns()) != 0 {
+		t.Fatal("stranger turn started on a harness without GuestLock")
+	}
+	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.1", ThreadTS: "1.0", User: sin, Text: "<@" + alpha + "> hi"})
+	eventually(t, "sin served", func() bool { return tm.fp.count("done: hi") == 1 })
+}

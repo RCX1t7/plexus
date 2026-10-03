@@ -53,8 +53,16 @@ func run(args []string) error {
 	setupFlag := fs.Bool("setup", false, "open the setup page")
 	hidden := fs.Bool("hidden", false, "hide the console window (Task Scheduler)")
 	exeFlag := fs.String("exe", "", "plexus.exe path for install-task")
-	if err := fs.Parse(args); err != nil {
-		return err
+	// Flags may come before or after positional arguments.
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		pos, args = append(pos, fs.Arg(0)), fs.Args()[1:]
 	}
 	cfgDir, dataDir, err := dirs(*cfgFlag)
 	if err != nil {
@@ -76,12 +84,13 @@ func run(args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(harness.DetectAll(context.Background(), harness.OSEnv()))
 	case "stop", "revoke":
-		if fs.NArg() != 1 {
+		if len(pos) != 1 {
 			return errors.New("usage: plexus stop <task-id>")
 		}
-		n, err := supervisor.RemoteStop(dataDir, fs.Arg(0))
+		id := pos[0]
+		n, err := supervisor.RemoteStop(dataDir, id)
 		if err == nil {
-			fmt.Printf("stopped %s (%d running sessions ended)\n", fs.Arg(0), n)
+			fmt.Printf("stopped %s (%d running sessions ended)\n", id, n)
 			return nil
 		}
 		if !errors.Is(err, supervisor.ErrNoHub) {
@@ -92,10 +101,10 @@ func run(args []string) error {
 			return err
 		}
 		defer st.Close()
-		if err := st.Revoke(fs.Arg(0), "cli"); err != nil {
+		if err := st.Revoke(id, "cli"); err != nil {
 			return err
 		}
-		fmt.Println("stopped", fs.Arg(0), "(no hub running; it will not start new turns on this task)")
+		fmt.Println("stopped", id, "(no hub running; it will not start new turns on this task)")
 		return nil
 	case "install-task":
 		return installTask(*exeFlag)

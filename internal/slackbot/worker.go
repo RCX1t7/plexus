@@ -219,6 +219,15 @@ func (w *Worker) Handle(ctx context.Context, in Inbound) {
 	_ = w.Store.SaveSession(w.Bot.Name, key, store.Session{RootTask: root, Channel: in.Channel, ThreadTS: in.thread()})
 
 	j := job{in: in, auth: auth, autonomous: !mentioned && !in.DM, handoff: ho}
+	if w.Policy.Restricted(auth) && w.Harness.Capabilities().GuestLock != harness.Native {
+		// This harness can run "safe" commands without asking Plexus, so a
+		// stranger's turn could not be held to read-only: do not take it.
+		if !j.autonomous {
+			w.post(t, j, RequestID(w.Bot.Name, in.Channel, in.TS, "guest"), "warn",
+				"I can only take requests from my team here. Ask Sin if you need me.")
+		}
+		return
+	}
 	if j.autonomous {
 		if !w.hostTools() {
 			return // text-only harness: it answers when addressed
