@@ -149,7 +149,8 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	defer cancel()
 	fail := func(err error) (harness.Session, error) { s.Close(); return nil, err }
 	var init struct {
-		Protocol int `json:"protocol"`
+		Protocol     int               `json:"protocol"`
+		Capabilities map[string]string `json:"capabilities"`
 	}
 	if err := s.rpc.Call(cctx, "plexus.initialize", map[string]any{"protocol": Protocol,
 		"client": map[string]any{"name": "plexus", "version": "0.1.0"}}, &init); err != nil {
@@ -157,6 +158,17 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	}
 	if init.Protocol != Protocol {
 		return fail(fmt.Errorf("dsh bridge speaks protocol %d, want %d", init.Protocol, Protocol))
+	}
+	// Start-up rule (CR-6): DSH accepts strangers, so its guest lock must be
+	// native (the plugin's tools.guard). If the plugin reports the guest lock
+	// is not native, refuse to start the whole session rather than let a
+	// stranger's turn reach write/exec tools. The guest lock is never waived by
+	// ungated_ok (that only waives the dangerous-action gate, decided core-side
+	// with the bot config). A plugin that reports no capabilities (e.g. the
+	// test fake) is left to fail closed per prompt (-32007).
+	if gl := init.Capabilities["guest_lock"]; gl != "" && gl != "native" {
+		return fail(fmt.Errorf("dsh bridge guest lock is not native (guest_lock=%q); DSH accepts strangers, "+
+			"so Plexus refuses to start a session it cannot lock", gl))
 	}
 	var res struct {
 		SessionID string `json:"sessionId"`
@@ -217,6 +229,12 @@ func (s *session) ID() string                   { return s.id }
 func (s *session) Events() <-chan harness.Event { return s.em.C() }
 
 func (s *session) Close() error {
+	// Ask the bridge to exit cleanly (plexus.shutdown) before killing the
+	// process tree, so DSH can flush the session. Best effort and bounded:
+	// p.Close() still kills the tree if the bridge does not exit in time.
+	sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	_ = s.rpc.Call(sctx, "plexus.shutdown", map[string]any{}, nil)
+	cancel()
 	err := s.p.Close()
 	s.em.Close()
 	return err
@@ -338,8 +356,15 @@ func (s *session) request(method string, raw json.RawMessage, reply func(any, *h
 	e := harness.Event{ID: w.ID, ParentID: w.ParentID, TurnID: s.mapTurn(w.TurnID), SessionID: s.id, Raw: raw}
 	switch method {
 	case "plexus.permission":
-		// one classifier for all adapters: the Go core reads Kind/Command/Paths
-		e.Perm = &harness.PermissionRequest{Tool: harness.Normalize(w.Tool), Reason: w.Reason, Options: w.Options}
+		// one classifier for all adapters: the Go core reads Kind/Command/Paths.
+		// DSH-internal meta tools (send_message, subagent*, job_*, ...) are
+		// pinned to ToolMeta so the classifier never mistakes them for an
+		// egress or a dangerous call (CR-5); Normalize keeps a preset kind.
+		tr := w.Tool
+		if k := internalKind(tr.Name); k != "" {
+			tr.Kind = k
+		}
+		e.Perm = &harness.PermissionRequest{Tool: harness.Normalize(tr), Reason: w.Reason, Options: w.Options}
 		s.em.Ask(tctx, e, func(d harness.Decision) {
 			reply(map[string]any{"allow": d.Allow, "optionId": d.OptionID, "always": d.Always, "reason": d.Reason}, nil)
 		})
