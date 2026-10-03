@@ -127,3 +127,27 @@ func HideConsole() {
 		_, _, _ = procShowWindow.Call(hwnd, 0) // SW_HIDE
 	}
 }
+
+var (
+	procOpenProcess        = kernel32.NewProc("OpenProcess")
+	procGetExitCodeProcess = kernel32.NewProc("GetExitCodeProcess")
+	procCloseHandle        = kernel32.NewProc("CloseHandle")
+)
+
+// ProcessAlive reports whether a process with this pid is still running.
+func ProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	const queryLimited, stillActive = 0x1000, 259
+	h, _, _ := procOpenProcess.Call(queryLimited, 0, uintptr(pid))
+	if h == 0 {
+		return false // gone, or not ours to open (treated as gone)
+	}
+	defer procCloseHandle.Call(h)
+	var code uint32
+	if ok, _, _ := procGetExitCodeProcess.Call(h, uintptr(unsafe.Pointer(&code))); ok == 0 {
+		return false
+	}
+	return code == stillActive
+}

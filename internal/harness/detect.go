@@ -67,6 +67,12 @@ func runVersion(ctx context.Context, exe string, args ...string) (string, error)
 // hooks, subagents), CLAUDECODE makes it think it runs inside a parent.
 var scrubbed = []string{"CLAUDECODE", "CLAUDE_CODE_SIMPLE"}
 
+// AuthEnv lists variables harnesses read for their own login. Plexus never
+// stores, injects or scrubs harness credentials: children inherit them as
+// they are. Their values are only registered with the log redactor.
+var AuthEnv = []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+	"OPENAI_API_KEY", "CODEX_API_KEY", "DEEPSEEK_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"}
+
 // ChildEnv is os.Environ() minus scrubbed variables, plus extra.
 func ChildEnv(extra []string) []string {
 	var out []string

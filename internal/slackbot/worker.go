@@ -92,10 +92,12 @@ type Worker struct {
 	Options harness.SessionOptions
 	// Danger is the dangerous_actions config (Sin's approval gate).
 	Danger danger.Rules
+	// LockDir holds the workdir-<hash>.lock notes (warning only); "" = off.
+	LockDir string
 
-	mu        sync.Mutex
-	threads   map[string]*thread
-	seq       int
+	mu      sync.Mutex
+	threads map[string]*thread
+	seq     int
 }
 
 type thread struct {
@@ -428,7 +430,7 @@ func (t *thread) loop(ctx context.Context) {
 		}
 		t.closeSession()
 	}()
-	idle := time.NewTimer(idleClose)
+	idle := time.NewTimer(w.idleFor())
 	defer idle.Stop()
 	for {
 		j, ok := t.pop()
@@ -442,6 +444,10 @@ func (t *thread) loop(ctx context.Context) {
 				return
 			case <-t.wake:
 			case <-idle.C:
+				if ts, ok := t.session().(harness.TaskStopper); ok && len(ts.BackgroundTasks()) > 0 {
+					idle.Reset(w.idleFor()) // background work still running
+					continue
+				}
 				t.closeSession() // the next message resumes the native session id
 			case ev, ok := <-events:
 				if !ok {
@@ -452,13 +458,18 @@ func (t *thread) loop(ctx context.Context) {
 			}
 			continue
 		}
-		idle.Reset(idleClose)
+		idle.Reset(w.idleFor())
 		if j.stop {
 			t.closeSession()
 			continue
 		}
 		if t.session() == nil {
 			s, err := w.open(ctx, t)
+			if err != nil && isBusy(err) {
+				w.log().Warn("session open elsewhere; not resuming", "thread", t.key, "err", err.Error())
+				w.post(t, j, RequestID(w.Bot.Name, j.in.Channel, j.in.TS, "busy"), "warn", busyText(err))
+				continue
+			}
 			if err != nil {
 				w.log().Error("harness session failed", "err", err.Error())
 				w.post(t, j, RequestID(w.Bot.Name, j.in.Channel, j.in.TS, "err"), "warn", "⚠️ could not start "+w.Harness.Name()+": "+err.Error())
@@ -467,6 +478,7 @@ func (t *thread) loop(ctx context.Context) {
 			t.mu.Lock()
 			t.sess = s
 			t.mu.Unlock()
+			w.noteWorkdir(t)
 		}
 		if !w.turn(ctx, t, j) {
 			t.closeSession()
@@ -494,6 +506,7 @@ func (t *thread) closeSession() {
 	t.mu.Unlock()
 	if s != nil {
 		_ = s.Close()
+		t.w.releaseWorkdir(t)
 	}
 }
 
@@ -512,6 +525,9 @@ func (w *Worker) open(ctx context.Context, t *thread) (harness.Session, error) {
 	}
 	if prev, ok, _ := w.Store.LoadSession(w.Bot.Name, t.key); ok {
 		o.ResumeID = prev.NativeID
+	}
+	if err := w.checkActive(t, o.ResumeID); err != nil {
+		return nil, err // never resume a session another app has open
 	}
 	return w.Harness.StartSession(ctx, o)
 }

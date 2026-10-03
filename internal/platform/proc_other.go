@@ -42,3 +42,12 @@ func OpenBrowser(url string) error { return exec.Command("xdg-open", url).Start(
 
 // HideConsole is a no-op outside Windows.
 func HideConsole() {}
+
+// ProcessAlive reports whether a process with this pid exists.
+func ProcessAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
+}

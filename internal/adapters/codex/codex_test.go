@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,5 +90,17 @@ func TestInterrupt(t *testing.T) {
 	go func() { time.Sleep(100 * time.Millisecond); _ = s.Interrupt(context.Background()) }()
 	if fin, _ := d.Turn(t, s, "SLOW", harness.LevelFull); fin.Kind != harness.EventError && fin.Kind != harness.EventFinal {
 		t.Fatalf("%+v", fin)
+	}
+}
+
+func TestResumeOfThreadWithActiveWriterIsRefused(t *testing.T) {
+	o := fakes.Options(t, "codex")
+	o.ResumeID = "busy"
+	_, err := Adapter{}.StartSession(context.Background(), o)
+	if !errors.Is(err, harness.ErrActiveElsewhere) {
+		t.Fatalf("%v", err)
+	}
+	if (Adapter{}).IdleUnload() <= 0 {
+		t.Fatal("codex threads must be unloaded when idle")
 	}
 }

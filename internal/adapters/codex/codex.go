@@ -24,6 +24,10 @@ type Adapter struct{}
 
 func (Adapter) Name() string { return "codex" }
 
+// IdleUnload: a loaded thread holds Codex's writer lock, which keeps the
+// Codex app and CLI from resuming it, so idle threads are unloaded soon.
+func (Adapter) IdleUnload() time.Duration { return 5 * time.Minute }
+
 func (Adapter) Capabilities() harness.Capabilities {
 	n, u := harness.Native, harness.Unsupported
 	return harness.Capabilities{PermissionCallback: n, AskUser: n, BackgroundTasks: n, Subagents: n,
@@ -133,6 +137,11 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 		} `json:"thread"`
 	}
 	if err := s.rpc.Call(cctx, method, params, &res); err != nil {
+		if o.ResumeID != "" && strings.Contains(strings.ToLower(err.Error()), "active writer") {
+			// Codex's per-thread writer lock: the thread is loaded in the
+			// Codex app, a CLI or IDE. Plexus does not take it over.
+			return fail(fmt.Errorf("%w: Codex reports the thread already has an active writer (the Codex app, a CLI or an IDE)", harness.ErrActiveElsewhere))
+		}
 		return fail(fmt.Errorf("codex %s: %w", method, err))
 	}
 	s.thread = res.Thread.ID

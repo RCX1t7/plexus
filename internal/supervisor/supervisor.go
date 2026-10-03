@@ -96,6 +96,11 @@ func Open(ctx context.Context, configDir, dataDir string, lw *redact.Writer) (*H
 	if err != nil {
 		return nil, err
 	}
+	for _, k := range harness.AuthEnv { // never logged, never touched
+		if v := os.Getenv(k); v != "" {
+			lw.AddSecret(v)
+		}
+	}
 	return &Hub{ConfigDir: configDir, DataDir: dataDir, Config: cfg, Store: st, Secrets: sec,
 		Peers: &slackbot.Peers{}, Stops: &slackbot.Stops{},
 		Detected: found, Log: log, LogWriter: lw, running: map[string]*botRun{}, online: map[string]bool{}}, nil
@@ -318,7 +323,7 @@ func (h *Hub) runOnce(ctx context.Context, cfg *config.Config, b config.Bot, hn 
 		}
 	}()
 	w := &slackbot.Worker{Bot: b, Harness: hn, Store: h.Store, Outbox: ob, Policy: h.Policy(cfg, b),
-		Owners: cfg.Owners, Peers: h.Peers, Stops: h.Stops, SelfID: self, Danger: cfg.DangerousActions,
+		Owners: cfg.Owners, Peers: h.Peers, Stops: h.Stops, SelfID: self, Danger: cfg.DangerousActions, LockDir: filepath.Join(h.DataDir, "locks"),
 		Log: h.Log.With("partner", b.Name), OriginWait: 2 * time.Second}
 	var recovered sync.Once
 	return slackbot.Run(ctx, api, w, func() {

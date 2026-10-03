@@ -125,6 +125,9 @@ func codex(s *server, method string, p map[string]any) (any, *rpcErr) {
 		if t, ok := p["threadId"].(string); ok {
 			id = t
 		}
+		if id == "busy" {
+			return nil, &rpcErr{Code: -32600, Message: "Conflict: thread busy already has an active writer"}
+		}
 		return map[string]any{"thread": map[string]any{"id": id}}, nil
 	case "turn/steer":
 		in, _ := p["input"].([]any)
@@ -242,6 +245,9 @@ func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 		id := "dsh-1"
 		if r := toString(p["resume"]); r != "" {
 			id = r
+		}
+		if id == "busy" {
+			return nil, &rpcErr{Code: -32002, Message: "session busy is locked by another process (lease held)"}
 		}
 		return map[string]any{"sessionId": id}, nil
 	case "plexus.cancel":

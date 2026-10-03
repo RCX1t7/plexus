@@ -2,6 +2,7 @@ package dsh
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -39,5 +40,13 @@ func TestBridgeTurnPermissionHostToolSteer(t *testing.T) {
 	}()
 	if fin, _ := (fakes.Driver{}).Turn(t, s, "SLOW", harness.LevelFull); fin.Text != "steered: more" {
 		t.Fatalf("%q", fin.Text)
+	}
+}
+
+func TestResumeOfLeasedSessionIsRefused(t *testing.T) {
+	o := fakes.Options(t, "dsh")
+	o.ResumeID = "busy"
+	if _, err := (Adapter{}).StartSession(context.Background(), o); !errors.Is(err, harness.ErrActiveElsewhere) {
+		t.Fatalf("%v", err)
 	}
 }

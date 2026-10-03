@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 // LoginState is tri-state: detection never sends a model request, so it can
@@ -214,3 +215,18 @@ func DetectAll(ctx context.Context, env Env) []DetectionResult {
 // session to resume is open in another process: a desktop app, a terminal
 // CLI, or another agent. Plexus then does not resume it.
 var ErrActiveElsewhere = errors.New("this session is open in another app")
+
+// ActivityChecker is implemented by harnesses whose sessions have no native
+// cross-process lock (Claude Code). Before every resume, Plexus asks whether
+// sessionID is in use by another process; ourLast is when Plexus itself last
+// used it (zero if unknown). detail says why, for the message to Sin.
+type ActivityChecker interface {
+	ActiveElsewhere(env Env, sessionID string, ourLast time.Time) (detail string, busy bool)
+}
+
+// IdleUnloader is implemented by harnesses whose loaded sessions block other
+// apps (Codex holds a writer lock per loaded thread). Plexus closes an idle
+// session after IdleUnload instead of the default; the next message resumes it.
+type IdleUnloader interface {
+	IdleUnload() time.Duration
+}
