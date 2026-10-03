@@ -199,12 +199,15 @@ func (s *session) Send(ctx context.Context, t harness.Turn) (string, error) {
 	params := map[string]any{"threadId": s.thread,
 		"input": []any{map[string]any{"type": "text", "text": t.Text}}, "cwd": s.workdir,
 		"approvalPolicy": approval, "sandboxPolicy": sandbox}
-	err := s.rpc.Call(tctx, "turn/start", params, &res)
+	// turn/start runs on the caller's ctx, not the turn's: the turn can
+	// complete (and End cancel tctx) before this response arrives, and that
+	// must not turn a finished turn into "context canceled".
+	err := s.rpc.Call(ctx, "turn/start", params, &res)
 	var re *harness.RPCError
 	if err != nil && errors.As(err, &re) && re.Code == -32602 && sandbox["access"] != nil {
 		// Older schema without readOnly.access: fall back to plain readOnly.
 		params["sandboxPolicy"] = map[string]any{"type": "readOnly"}
-		err = s.rpc.Call(tctx, "turn/start", params, &res)
+		err = s.rpc.Call(ctx, "turn/start", params, &res)
 	}
 	if err != nil {
 		s.turn.End(id)
