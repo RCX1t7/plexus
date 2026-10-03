@@ -158,9 +158,31 @@ func (w *Worker) hostTools() bool {
 	return c == harness.Native || c == harness.Emulated
 }
 
-// isStop reports an exact stop word (case-insensitive "stop", or "停").
+// mentionRe matches a Slack user mention token, e.g. <@U123> or <@U123|name>.
+var mentionRe = regexp.MustCompile(`<@[A-Za-z0-9]+(?:\|[^>]*)?>`)
+
+// stripMentions removes every user mention and trims the rest.
+func stripMentions(text string) string {
+	return strings.TrimSpace(mentionRe.ReplaceAllString(text, " "))
+}
+
+// mentions lists the user ids mentioned in text, in order.
+func mentions(text string) []string {
+	var ids []string
+	for _, m := range mentionRe.FindAllString(text, -1) {
+		id := strings.TrimSuffix(strings.TrimPrefix(m, "<@"), ">")
+		if i := strings.IndexByte(id, '|'); i >= 0 {
+			id = id[:i]
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// isStop reports an exact stop word (case-insensitive "stop", or "停") once
+// every @-mention is stripped, so "<@a> <@b> stop" stops too.
 func isStop(text string) bool {
-	t := strings.TrimSpace(text)
+	t := stripMentions(text)
 	return strings.EqualFold(t, "stop") || t == "停"
 }
 
