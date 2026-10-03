@@ -258,6 +258,12 @@ func acp(s *server, method string, p map[string]any) (any, *rpcErr) {
 func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 	switch method {
 	case "plexus.initialize":
+		// PLEXUS_FAKE_DSH_NOGUARD=1 models a bridge that could not install the
+		// guest guard: it reports {protocol:1} with no capabilities, so the
+		// adapter must fail closed and refuse the session (CR-6 / item 14).
+		if os.Getenv("PLEXUS_FAKE_DSH_NOGUARD") == "1" {
+			return map[string]any{"protocol": 1}, nil
+		}
 		return map[string]any{"protocol": 1,
 			"capabilities": map[string]any{"guest_lock": "native", "danger_gate": "native",
 				"permission": "native", "host_tools": "native"}}, nil
