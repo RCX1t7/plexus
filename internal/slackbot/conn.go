@@ -126,8 +126,18 @@ func Run(ctx context.Context, api *slack.Client, w *Worker, onConnected func()) 
 			if !ok {
 				return errors.New("socket mode closed")
 			}
-			if evt.Type == socketmode.EventTypeConnected && onConnected != nil {
-				onConnected()
+			switch evt.Type {
+			case socketmode.EventTypeConnected:
+				if onConnected != nil {
+					onConnected()
+				}
+			case socketmode.EventTypeConnectionError, socketmode.EventTypeInvalidAuth:
+				// slack-go retries on its own; make the failures visible.
+				var detail string
+				if ce, ok := evt.Data.(*slack.ConnectionErrorEvent); ok && ce.ErrorObj != nil {
+					detail = ce.ErrorObj.Error()
+				}
+				w.log().Warn("slack connection problem", "event", string(evt.Type), "err", detail)
 			}
 			if evt.Type == socketmode.EventTypeInteractive {
 				if cb, ok := evt.Data.(slack.InteractionCallback); ok && cb.Type == slack.InteractionTypeBlockActions {

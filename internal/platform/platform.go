@@ -26,7 +26,7 @@ func ConfigDir() string {
 	return filepath.Join(d, "plexus")
 }
 
-// DataDir holds the SQLite database: %LOCALAPPDATA%\Plexus on Windows.
+// DataDir holds the bbolt database (plexus.db): %LOCALAPPDATA%\Plexus on Windows.
 func DataDir() string {
 	if h := os.Getenv("PLEXUS_HOME"); h != "" {
 		return h

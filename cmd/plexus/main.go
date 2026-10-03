@@ -6,7 +6,7 @@
 //	plexus detect                                   print detected harnesses as JSON
 //	plexus stop <task-id> [--config DIR]            stop a task tree
 //	plexus install-task [--exe PATH]                register the logon task (Windows)
-//	plexus version
+//	plexus version | --version | -v
 package main
 
 import (
@@ -44,6 +44,11 @@ func main() {
 }
 
 func run(args []string) error {
+	// --version is answered first: no config, no store, no network.
+	if len(args) > 0 && (args[0] == "--version" || args[0] == "-version" || args[0] == "-v" || args[0] == "version") {
+		fmt.Println("plexus", version, runtime.GOOS+"/"+runtime.GOARCH)
+		return nil
+	}
 	cmd := "run"
 	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		cmd, args = args[0], args[1:]
