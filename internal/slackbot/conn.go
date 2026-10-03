@@ -140,15 +140,15 @@ func Run(ctx context.Context, api *slack.Client, w *Worker, onConnected func()) 
 				w.log().Warn("slack connection problem", "event", string(evt.Type), "err", detail)
 			}
 			if evt.Type == socketmode.EventTypeInteractive {
+				if evt.Request != nil {
+					sm.Ack(*evt.Request) // ack first: Slack wants it within 3 s
+				}
 				if cb, ok := evt.Data.(slack.InteractionCallback); ok && cb.Type == slack.InteractionTypeBlockActions {
 					for _, a := range cb.ActionCallback.BlockActions {
-						if a.ActionID == ActionApprove || a.ActionID == ActionDeny {
-							w.Approve(ctx, a.Value, cb.User.ID, a.ActionID == ActionApprove)
+						if mode := ModeForAction(a.ActionID); mode != "" {
+							w.Approve(ctx, a.Value, cb.User.ID, mode)
 						}
 					}
-				}
-				if evt.Request != nil {
-					sm.Ack(*evt.Request)
 				}
 				continue
 			}

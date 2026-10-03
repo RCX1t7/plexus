@@ -47,6 +47,8 @@ func newTeam(t *testing.T, hostTools bool) *team {
 			Owners: []string{sin}, Peers: tm.peers, Stops: tm.stops, SelfID: id, OriginWait: 100 * time.Millisecond}
 	}
 	tm.alpha, tm.beta = mk("alpha", alpha, tm.ha), mk("beta", beta, tm.hb)
+	tm.stops.Register(tm.alpha)
+	tm.stops.Register(tm.beta)
 	return tm
 }
 

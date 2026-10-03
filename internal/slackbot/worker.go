@@ -192,6 +192,7 @@ func (w *Worker) Handle(ctx context.Context, in Inbound) {
 	if in.User == "" || in.User == w.SelfID {
 		return
 	}
+	w.Stops.Register(w)
 	key := in.Channel + ":" + in.thread()
 	w.mu.Lock()
 	t := w.threads[key]
@@ -231,7 +232,17 @@ func (w *Worker) Handle(ctx context.Context, in Inbound) {
 		return
 	}
 	// The task tree: stopped trees start no new turns until Sin speaks again.
+	// A partner joining a thread (or taking a handoff) joins its tree, so a
+	// stop or a grant covers every partner working on it.
 	root := w.rootOf(key)
+	if root == "" && ho != "" {
+		if h, ok, _ := w.Store.GetHandoff(ho); ok {
+			root = h.ParentTask
+		}
+	}
+	if root == "" {
+		root, _ = w.Store.RootTaskForThread(key)
+	}
 	if root != "" {
 		if stopped, _ := w.Store.AnyRevoked(root); stopped {
 			if auth.Source != policy.FromSin {
@@ -802,6 +813,7 @@ func (w *Worker) observe(ev harness.Event) {
 // Recover resumes turns interrupted by a crash and retires questions whose
 // harness process is gone. Called once after connecting.
 func (w *Worker) Recover(ctx context.Context) {
+	w.Stops.Register(w)
 	w.recoverApprovals(ctx)
 	if qs, err := w.Store.OpenQuestions(w.Bot.Name); err == nil {
 		for _, q := range qs {

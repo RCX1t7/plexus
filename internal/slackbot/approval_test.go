@@ -51,13 +51,13 @@ func TestDangerousActionIsParkedForSinOnly(t *testing.T) {
 	if tm.fp.count("allow=true") != 0 {
 		t.Fatal("ran before Sin decided")
 	}
-	if tm.alpha.Approve(tm.ctx, c.Meta.RequestID, other, true) {
+	if tm.alpha.Approve(tm.ctx, c.Meta.RequestID, other, DecideOnce) {
 		t.Fatal("a stranger's click counted")
 	}
-	if tm.alpha.Approve(tm.ctx, c.Meta.RequestID, beta, true) {
+	if tm.alpha.Approve(tm.ctx, c.Meta.RequestID, beta, DecideOnce) {
 		t.Fatal("a partner's click counted")
 	}
-	if !tm.alpha.Approve(tm.ctx, c.Meta.RequestID, sin, false) {
+	if !tm.alpha.Approve(tm.ctx, c.Meta.RequestID, sin, DecideDeny) {
 		t.Fatal("Sin's click ignored")
 	}
 	eventually(t, "partner told", turnSays(tm.ha, "Sin denied the parked action"))
@@ -65,7 +65,7 @@ func TestDangerousActionIsParkedForSinOnly(t *testing.T) {
 	if !c.Updated || !strings.Contains(c.Text, "Denied") {
 		t.Fatalf("card not updated: %+v", c)
 	}
-	if tm.alpha.Approve(tm.ctx, c.Meta.RequestID, sin, true) {
+	if tm.alpha.Approve(tm.ctx, c.Meta.RequestID, sin, DecideOnce) {
 		t.Fatal("decided twice")
 	}
 }
@@ -114,13 +114,13 @@ func TestStopCancelsParkedApproval(t *testing.T) {
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.1", ThreadTS: "1.0", User: sin, Text: "stop"})
 	eventually(t, "ack", func() bool { return tm.fp.count(StopAck) == 1 })
 	c, _ := card(tm)
-	if !strings.Contains(c.Text, "Cancelled by stop") {
+	if !strings.Contains(c.Text, "已随 stop 取消") {
 		t.Fatalf("%+v", c)
 	}
-	if a, _, _ := tm.st.GetApproval(c.Meta.RequestID); a.State != store.ApprovalStopped {
+	if a, _, _ := tm.st.GetApproval(c.Meta.RequestID); a.State != store.ApprovalCancelled {
 		t.Fatal(a.State)
 	}
-	if tm.alpha.Approve(tm.ctx, c.Meta.RequestID, sin, true) {
+	if tm.alpha.Approve(tm.ctx, c.Meta.RequestID, sin, DecideOnce) {
 		t.Fatal("approved after stop")
 	}
 	if tm.fp.count("allow=true") != 0 {
@@ -134,6 +134,7 @@ func TestParkedApprovalSurvivesRestart(t *testing.T) {
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.0", User: sin, Text: push})
 	eventually(t, "card", func() bool { _, ok := card(tm); return ok })
 	c, _ := card(tm)
+	eventually(t, "card recorded as sent", func() bool { m, _ := tm.st.Get(c.Meta.RequestID); return m.SlackTS != "" })
 	// "restart": a fresh worker over the same store
 	a := tm.alpha
 	h2 := &fakeHarness{}
@@ -144,7 +145,7 @@ func TestParkedApprovalSurvivesRestart(t *testing.T) {
 	if cards(tm) != 1 || !strings.Contains(c2.Text, "Still waiting for Sin") || c2.TS != c.TS {
 		t.Fatalf("restart re-posted or did not mark the card: n=%d %+v", cards(tm), c2)
 	}
-	if !w2.Approve(tm.ctx, c.Meta.RequestID, sin, true) {
+	if !w2.Approve(tm.ctx, c.Meta.RequestID, sin, DecideOnce) {
 		t.Fatal("approve after restart")
 	}
 	eventually(t, "partner told", turnSays(h2, "Re-issue exactly the same call"))

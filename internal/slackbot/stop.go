@@ -16,8 +16,41 @@ var StopGrace = 3 * time.Second
 // Stops is the hub-wide registry of which threads (of any partner) work on
 // which task tree, so one stop reaches every partner's session.
 type Stops struct {
-	mu sync.Mutex
-	m  map[string]map[*thread]bool
+	mu      sync.Mutex
+	m       map[string]map[*thread]bool
+	workers map[string]*Worker // partner name -> worker (card owners, cross-partner notes)
+}
+
+// Register makes w reachable by the other partners' workers (approval
+// cards it owns, notes to its threads, stops of trees it works on).
+func (s *Stops) Register(w *Worker) {
+	if s == nil || w == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.workers == nil {
+		s.workers = map[string]*Worker{}
+	}
+	s.workers[w.Bot.Name] = w
+}
+
+func (s *Stops) worker(name string) *Worker {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workers[name]
+}
+
+func (s *Stops) anyWorker() *Worker {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, w := range s.workers {
+		return w
+	}
+	return nil
 }
 
 func (s *Stops) add(root string, t *thread) {
@@ -54,6 +87,11 @@ func (s *Stops) Stop(ctx context.Context, rev interface{ Revoke(id, by string) e
 	if err := rev.Revoke(root, by); err != nil {
 		return 0, err
 	}
+	if w := s.anyWorker(); w != nil {
+		// From the store, not the live registry: this also reaches cards
+		// parked before a restart, of any partner in the tree.
+		cancelRoot(ctx, w, root)
+	}
 	ts := s.take(root)
 	var wg sync.WaitGroup
 	for _, t := range ts {
@@ -86,7 +124,6 @@ func (t *thread) softStop(ctx context.Context) {
 	if q != nil && q.ev.Answer != nil {
 		q.ev.Answer(nil)
 	}
-	t.w.cancelApprovals(t)
 	if s != nil {
 		ictx, done := context.WithTimeout(ctx, StopGrace)
 		if ts, ok := s.(harness.TaskStopper); ok {

@@ -329,6 +329,7 @@ func (h *Hub) runOnce(ctx context.Context, cfg *config.Config, b config.Bot, hn 
 	w := &slackbot.Worker{Bot: b, Harness: hn, Store: h.Store, Outbox: ob, Policy: h.Policy(cfg, b),
 		Owners: cfg.Owners, Peers: h.Peers, Stops: h.Stops, SelfID: self, Danger: cfg.DangerousActions, LockDir: filepath.Join(h.DataDir, "locks"),
 		Log: h.Log.With("partner", b.Name), OriginWait: 2 * time.Second}
+	h.Stops.Register(w)
 	var recovered sync.Once
 	return slackbot.Run(ctx, api, w, func() {
 		h.Log.Info("partner online", "partner", b.Name, "harness", hn.Name(), "slack_user", self)

@@ -8,6 +8,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -36,6 +37,7 @@ var (
 	bHandoffs  = []byte("handoffs")
 	bQuestions = []byte("questions")
 	bApprovals = []byte("approvals")
+	bGrants    = []byte("grants")
 )
 
 // ErrNotFound is returned for missing records.
@@ -55,7 +57,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bOutbox, bSeen, bRevoked, bSessions, bOrigins, bHandoffs, bQuestions, bApprovals} {
+		for _, b := range [][]byte{bOutbox, bSeen, bRevoked, bSessions, bOrigins, bHandoffs, bQuestions, bApprovals, bGrants} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -493,30 +495,41 @@ func (s *Store) Prune(age time.Duration) error {
 
 // Approval states.
 const (
-	ApprovalPending  = "pending"
-	ApprovalApproved = "approved" // approved by Sin: the identical re-issued call passes once
-	ApprovalDenied   = "denied"
-	ApprovalStopped  = "stopped" // denied by a stop
-	ApprovalConsumed = "consumed"
+	ApprovalPending   = "pending"
+	ApprovalApproved  = "approved" // approved by Sin: the identical re-issued call passes once
+	ApprovalDenied    = "denied"
+	ApprovalStopped   = "stopped"   // denied by a stop (older records)
+	ApprovalCancelled = "cancelled" // cancelled by a stop of its task tree
+	ApprovalConsumed  = "consumed"
+)
+
+// Approval modes Sin can choose on a card.
+const (
+	ModeOnce = "once" // the identical re-issued call passes once
+	ModeTask = "task" // a grant: (rule, target) passes for the rest of the task tree
 )
 
 // Approval is one dangerous-action request waiting for (or decided by) Sin.
 type Approval struct {
-	AID       string `json:"aid"`
-	Bot       string `json:"bot"`
-	Thread    string `json:"thread"` // channel:thread_ts
-	Channel   string `json:"channel"`
-	ThreadTS  string `json:"thread_ts"`
-	Root      string `json:"root"`
-	Rule      string `json:"rule"`
-	Reason    string `json:"reason"`
-	CallFP    string `json:"call_fp"`
-	Summary   string `json:"summary"`
-	CardID    string `json:"card_id"` // outbox request id of the card
-	State     string `json:"state"`
-	DecidedBy string `json:"decided_by,omitempty"`
-	Created   int64  `json:"created"`
-	Decided   int64  `json:"decided,omitempty"`
+	AID        string `json:"aid"`
+	Bot        string `json:"bot"`
+	Thread     string `json:"thread"` // channel:thread_ts
+	Channel    string `json:"channel"`
+	ThreadTS   string `json:"thread_ts"`
+	Root       string `json:"root"`
+	Rule       string `json:"rule"`
+	Reason     string `json:"reason"`
+	CallFP     string `json:"call_fp"`
+	Summary    string `json:"summary"`
+	CardID     string `json:"card_id"` // outbox request id of the card
+	CardBot    string `json:"card_bot,omitempty"`
+	Target     string `json:"target,omitempty"`      // normalized target of the rule (danger.Hit.Target)
+	MergedInto string `json:"merged_into,omitempty"` // primary approval whose card this call shares
+	Mode       string `json:"mode,omitempty"`        // once | task, once decided
+	State      string `json:"state"`
+	DecidedBy  string `json:"decided_by,omitempty"`
+	Created    int64  `json:"created"`
+	Decided    int64  `json:"decided,omitempty"`
 }
 
 // PutApproval stores a new approval request.
@@ -543,7 +556,8 @@ func (s *Store) DecideApproval(aid, state, by string) (Approval, bool, error) {
 	changed := false
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		v, ok := get[Approval](tx, bApprovals, aid)
-		if !ok || !(v.State == ApprovalPending || (v.State == ApprovalApproved && state == ApprovalStopped)) {
+		stop := state == ApprovalStopped || state == ApprovalCancelled
+		if !ok || !(v.State == ApprovalPending || (v.State == ApprovalApproved && stop)) {
 			a = v
 			return nil
 		}
@@ -593,4 +607,113 @@ func (s *Store) ConsumePreApproval(bot, thread, fp string) (bool, error) {
 		return put(tx, bApprovals, string(key), hit)
 	})
 	return found, err
+}
+
+// SetApprovalMode records how Sin approved (once or for the task).
+func (s *Store) SetApprovalMode(aid, mode string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		v, ok := get[Approval](tx, bApprovals, aid)
+		if !ok {
+			return nil
+		}
+		v.Mode = mode
+		return put(tx, bApprovals, aid, v)
+	})
+}
+
+// ApprovalsWhere lists approvals matching keep.
+func (s *Store) ApprovalsWhere(keep func(Approval) bool) ([]Approval, error) {
+	var out []Approval
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bApprovals).ForEach(func(_, v []byte) error {
+			var a Approval
+			if json.Unmarshal(v, &a) == nil && keep(a) {
+				out = append(out, a)
+			}
+			return nil
+		})
+	})
+	return out, err
+}
+
+// Grant is Sin's "approve for this task": rule on target passes for every
+// partner in the task tree Root until the tree is stopped or done.
+type Grant struct {
+	Root    string `json:"root"`
+	Rule    string `json:"rule"`
+	Target  string `json:"target"`
+	By      string `json:"by"`
+	AID     string `json:"aid"`
+	Created int64  `json:"created"`
+}
+
+func grantKey(root, rule, target string) string { return root + "|" + rule + "|" + target }
+
+// PutGrant stores a grant (merged by root, rule and target).
+func (s *Store) PutGrant(g Grant) error {
+	if g.Created == 0 {
+		g.Created = s.ts()
+	}
+	return s.db.Update(func(tx *bolt.Tx) error { return put(tx, bGrants, grantKey(g.Root, g.Rule, g.Target), g) })
+}
+
+// GrantCovers reports whether a grant in root covers rule on target: the
+// same target, or (for path targets) a directory above it.
+func (s *Store) GrantCovers(root, rule, target string) (bool, error) {
+	if root == "" {
+		return false, nil
+	}
+	found := false
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bGrants).Cursor()
+		prefix := []byte(root + "|" + rule + "|")
+		for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+			g := string(k[len(prefix):])
+			if g == target || (strings.HasPrefix(g, "/") || len(g) > 2 && g[1] == ':') && strings.HasPrefix(target, strings.TrimSuffix(g, "/")+"/") {
+				found = true
+				return nil
+			}
+		}
+		return nil
+	})
+	return found, err
+}
+
+// DeleteGrants drops every grant of a task tree (stop, tree done).
+func (s *Store) DeleteGrants(root string) (int, error) {
+	n := 0
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bGrants)
+		prefix := []byte(root + "|")
+		var keys [][]byte
+		c := b.Cursor()
+		for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+			keys = append(keys, append([]byte(nil), k...))
+		}
+		for _, k := range keys {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+		}
+		n = len(keys)
+		return nil
+	})
+	return n, err
+}
+
+// Grants lists the grants of a task tree.
+func (s *Store) Grants(root string) ([]Grant, error) {
+	var out []Grant
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bGrants).Cursor()
+		prefix := []byte(root + "|")
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			var g Grant
+			if json.Unmarshal(v, &g) == nil {
+				out = append(out, g)
+			}
+		}
+		return nil
+	})
+	return out, err
 }
