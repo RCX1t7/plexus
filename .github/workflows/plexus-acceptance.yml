@@ -113,10 +113,9 @@ jobs:
           npm test
           node scripts/build.mjs --check
 
-  # Wanted before the v0.1 tag; informational until then (never blocks).
+  # Blocking: the Go suite must pass on Windows (the product's target OS).
   windows-test:
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
