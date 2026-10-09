@@ -1,0 +1,5 @@
+# Check out LF on every OS. Windows runners default to core.autocrlf=true,
+# which rewrote go.sum to CRLF and made `go mod tidy -diff` report a diff of
+# identical-looking lines. Go sources, go.mod/go.sum, embedded scripts and
+# test fixtures are all byte-compared somewhere, so LF everywhere.
+* text=auto eol=lf
