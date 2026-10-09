@@ -38,6 +38,8 @@ marked UNVERIFIED in the plugin source have not been exercised live.
 - **Framing:** JSON-RPC 2.0, one JSON object per line (LF), on stdin/stdout.
   - A line may be up to **32 MiB** (`harness.MaxFrame`). A longer line is
     discarded up to its newline and the session goes on; it is not fatal.
+    Plexus reports it as a session-level `error` event with status
+    `frame_dropped`.
     The plugin enforces the same cap on what it sends and receives.
   - stderr is drained and discarded. Set `PLEXUS_HARNESS_STDERR=1` to mirror it.
 - **Direction:** both sides send requests. Unknown methods are answered with `-32601`.
@@ -191,17 +193,13 @@ lease while idle.
 ## Capabilities the Go side declares for DSH
 
 `PermissionCallback`, `AskUser`, `BackgroundTasks`, `Subagents`, `Resume`,
-`Interrupt`, `SystemPrompt`, `Control`, `PerTaskStop`, `HostTools`, `GuestLock`:
-`Native`, via the bridge plugin. `SlashCommands`, `Effort` and `StopHook` are
-declared `Unsupported`. (`Effort` is still passed through `session.open`;
-the capability flag has not been updated.)
+`Interrupt`, `SystemPrompt`, `Control`, `PerTaskStop`, `HostTools`, `GuestLock`,
+`Effort` (passed through `plexus.session.open`): `Native`, via the bridge
+plugin. `SlashCommands` and `StopHook` are declared `Unsupported`.
 
 ## Known limitations
 
 - No Provider in SessionOptions, so DSH's default provider is used.
-- The DSH adapter does not yet emit the `frame_dropped` error event for a
-  discarded oversize line (the Claude, Codex and ACP adapters do). The frame is
-  dropped and the session continues.
 - Methods the plugin defines that the Go side does not use: `plexus.session.close`
   (not sent; idle unload and stop close the process instead) and the
   `plexus.request.cancelled` notification (ignored).
