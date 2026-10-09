@@ -6,6 +6,7 @@ package deps_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -62,4 +63,17 @@ func TestDirectDependencyBudget(t *testing.T) {
 		}
 	}
 	t.Logf("direct requires: %v", direct)
+}
+
+// TestModTidy fails when go.mod/go.sum are not tidy, so a dependency marked
+// "// indirect" by hand (or a stale require) cannot slip past the budget.
+func TestModTidy(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go tool not on PATH")
+	}
+	cmd := exec.Command("go", "mod", "tidy", "-diff")
+	cmd.Dir = repoRoot(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go mod tidy -diff: %v\n%s", err, out)
+	}
 }
