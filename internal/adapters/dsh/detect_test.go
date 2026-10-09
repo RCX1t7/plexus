@@ -27,7 +27,7 @@ func env(node string, files map[string]bool, path map[string]string) harness.Env
 			}
 			return "", errors.New("not found")
 		},
-		Exists: func(p string) bool { return files[filepath.Clean(p)] },
+		Exists: func(p string) bool { return files[filepath.ToSlash(filepath.Clean(p))] },
 		RunVersion: func(_ context.Context, exe string, args ...string) (string, error) {
 			if len(args) == 1 && args[0] == "--version" {
 				return node + "\n", nil
@@ -42,7 +42,7 @@ func TestDetectNodeAndShims(t *testing.T) {
 	ctx := context.Background()
 
 	r := Adapter{}.Detect(ctx, env("v22.19.0", map[string]bool{js: true}, node))
-	if r.Path != js || r.Version != "dsh 0.2.0" || strings.Contains(r.Error, "Node") {
+	if filepath.ToSlash(r.Path) != js || r.Version != "dsh 0.2.0" || strings.Contains(r.Error, "Node") {
 		t.Fatalf("%+v", r)
 	}
 	r = Adapter{}.Detect(ctx, env("v22.18.1", map[string]bool{js: true}, node))
