@@ -652,7 +652,7 @@ func (w *Worker) turn(ctx context.Context, t *thread, j job) bool {
 		t.mu.Unlock()
 		_ = w.Store.UpdateSession(w.Bot.Name, t.key, func(s *store.Session) { s.Inflight, s.InflightSource, s.InflightUser = "", "", "" })
 	}()
-	id, err := sess.Send(tctx, harness.Turn{Text: w.frame(j), Level: w.Policy.Level(j.auth)})
+	id, err := sess.Send(tctx, harness.Turn{Text: w.frame(j), Guest: w.Policy.Guest(j.auth)})
 	if err != nil {
 		w.post(t, j, RequestID(w.Bot.Name, j.in.Channel, j.in.TS, "err"), "warn", "⚠️ "+err.Error())
 		return true

@@ -89,11 +89,11 @@ flowchart LR
 
 \* 依赖 bridge 插件，UNVERIFIED。
 
-`Turn.Level` 有三档：
+`Turn` 没有 `Level`（已删除），只有 `Guest bool`：
 
-- `chat`：陌生人轮次。不允许任何写入或执行，也不能联网抓取；工作目录内只读仍允许。每个适配器都必须执行。
-- `readonly`：只读工作目录（目前核心不下发这一档）。
-- `full`：可信轮次。
+- `Guest: true`：陌生人轮次。除 `plexus_post` 外不允许任何工具：不读、不写、不执行、不联网。每个适配器都必须在原生层锁住。
+- `Guest: false`：可信轮次。
+- `SessionOptions.Model` / `Effort` 可选，留空表示用该 harness 自己配置的默认值（Codex：`thread/start.model`、`turn/start.effort`；Claude：`--model=`；DSH 由 bridge 解析）。
 
 ### 4.2 存储：bbolt
 
@@ -231,7 +231,7 @@ ACP：只靠配置接入；`fs` 与 `terminal` 能力为 false；没有宿主工
 
 **`stranger_guard`**（默认 `true`，设置页可关）。开启时：
 
-- 陌生人的消息只触发 `chat` 级别的轮次（`harness.LevelChat`），即 GuestLock。每个适配器都必须执行它：不允许任何写入或执行；工作目录内只读仍可（过滤 `extra_deny`），联网抓取不行。
+- 陌生人的消息只触发陌生人轮次（`harness.Turn.Guest`），即 GuestLock。每个适配器都必须执行它：除 `plexus_post` 外不允许任何工具，包括读工作目录和联网抓取。
 - 陌生人轮次中，伙伴发出的帖子在 `origins` 中记为陌生人来源，其他伙伴收到时也按陌生人对待。这样别人无法借伙伴之手越过边界。
 - 在陌生人轮次中，`plexus_delegate`、`plexus_deliver` 和 `plexus_stop_tree` 都会被拒绝。
 - 伙伴帖子找不到来源记录时（等待 `OriginWait` 后仍没有），按陌生人处理（fail closed）。

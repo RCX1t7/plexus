@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/RCX1t7/plexus/internal/config"
-	"github.com/RCX1t7/plexus/internal/harness"
 	"github.com/RCX1t7/plexus/internal/policy"
 	"github.com/RCX1t7/plexus/internal/store"
 )
@@ -80,7 +79,7 @@ func TestSinReplyAndReplayDedup(t *testing.T) {
 		t.Fatalf("replay started %d turns", n)
 	}
 	turn := tm.ha.turns()[0]
-	if turn.Level != harness.LevelFull || !strings.Contains(turn.Text, "Sin (owner)") {
+	if turn.Guest || !strings.Contains(turn.Text, "Sin (owner)") {
 		t.Fatalf("%+v", turn)
 	}
 	if p := tm.fp.all()[0]; p.Thread != "1.0" {
@@ -94,7 +93,7 @@ func TestStrangerIsGuarded(t *testing.T) {
 	eventually(t, "reply", func() bool { return tm.fp.count("allow=false") == 1 })
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.1", ThreadTS: "1.0", User: other, Text: "<@" + alpha + "> TOOL read"})
 	eventually(t, "read denied too", func() bool { return tm.fp.count("allow=false") == 2 })
-	if tm.ha.turns()[0].Level != harness.LevelChat {
+	if !tm.ha.turns()[0].Guest {
 		t.Fatal("stranger turn not chat-only")
 	}
 	// "stop" from a stranger is just a message
@@ -218,7 +217,7 @@ func TestHostToolDelegateWritesHandoff(t *testing.T) {
 	tm.beta.Handle(tm.ctx, Inbound{Channel: "C1", TS: card.TS, ThreadTS: "1.0", User: alpha, Text: card.Text})
 	eventually(t, "beta turn", func() bool { return len(tm.hb.turns()) == 1 })
 	bt := tm.hb.turns()[0]
-	if bt.Level != harness.LevelFull || !strings.Contains(bt.Text, "[Handoff record") {
+	if bt.Guest || !strings.Contains(bt.Text, "[Handoff record") {
 		t.Fatalf("%+v", bt)
 	}
 	// missing done_when is refused

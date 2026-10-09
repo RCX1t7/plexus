@@ -22,7 +22,7 @@ func TestACPTurnPermissionCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if fin, _ := (fakes.Driver{}).Turn(t, s, "hi", harness.LevelFull); fin.Text != "echo: hi" {
+	if fin, _ := (fakes.Driver{}).Turn(t, s, "hi", false); fin.Text != "echo: hi" {
 		t.Fatalf("%+v", fin)
 	}
 	var kind harness.ToolKind
@@ -30,11 +30,11 @@ func TestACPTurnPermissionCancel(t *testing.T) {
 		kind = p.Tool.Kind
 		return harness.Decision{Allow: false}
 	}}
-	if fin, _ := d.Turn(t, s, "TOOL shell ls", harness.LevelFull); fin.Text != "outcome:no" || kind != harness.ToolShell {
+	if fin, _ := d.Turn(t, s, "TOOL shell ls", false); fin.Text != "outcome:no" || kind != harness.ToolShell {
 		t.Fatalf("%q %s", fin.Text, kind)
 	}
 	go func() { time.Sleep(100 * time.Millisecond); _ = s.Interrupt(context.Background()) }()
-	if fin, _ := (fakes.Driver{}).Turn(t, s, "SLOW", harness.LevelFull); fin.Kind != harness.EventError && fin.Kind != harness.EventFinal {
+	if fin, _ := (fakes.Driver{}).Turn(t, s, "SLOW", false); fin.Kind != harness.EventError && fin.Kind != harness.EventFinal {
 		t.Fatalf("%+v", fin)
 	}
 }

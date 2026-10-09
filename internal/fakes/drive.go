@@ -26,11 +26,11 @@ type Driver struct {
 
 // Turn sends text and drives the session until the turn's final or error
 // event; it returns that event and every event seen.
-func (d Driver) Turn(t *testing.T, s harness.Session, text string, lvl harness.Level) (harness.Event, []harness.Event) {
+func (d Driver) Turn(t *testing.T, s harness.Session, text string, guest bool) (harness.Event, []harness.Event) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	id, err := s.Send(ctx, harness.Turn{Text: text, Level: lvl})
+	id, err := s.Send(ctx, harness.Turn{Text: text, Guest: guest})
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}

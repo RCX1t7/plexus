@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -67,45 +66,6 @@ type DetectionResult struct {
 	Error     string       `json:"error,omitempty"`
 }
 
-// Level is the authority a turn runs with. It is a hint for native sandboxes
-// (defense in depth); the Plexus policy callback is the real gate.
-type Level int
-
-const (
-	// LevelChat is a stranger's turn: conversation only. Every adapter
-	// must keep it from writing files, running commands or using the
-	// network; the policy callback may still allow filtered reads of
-	// ordinary files inside the workdir.
-	LevelChat     Level = iota
-	LevelReadOnly       // read files inside the workdir
-	LevelFull           // everything the harness can do
-)
-
-func (l Level) String() string {
-	switch l {
-	case LevelChat:
-		return "chat"
-	case LevelReadOnly:
-		return "readonly"
-	case LevelFull:
-		return "full"
-	}
-	return fmt.Sprintf("level(%d)", int(l))
-}
-
-// ParseLevel parses "chat", "readonly" or "full".
-func ParseLevel(s string) (Level, error) {
-	switch s {
-	case "chat", "":
-		return LevelChat, nil
-	case "readonly", "read-only":
-		return LevelReadOnly, nil
-	case "full":
-		return LevelFull, nil
-	}
-	return LevelChat, fmt.Errorf("unknown level %q (want chat, readonly or full)", s)
-}
-
 // SessionOptions configures one conversation.
 type SessionOptions struct {
 	Workdir  string
@@ -117,6 +77,9 @@ type SessionOptions struct {
 	// HostTools are mounted natively where the harness supports it
 	// (Claude in-process MCP, Codex dynamicTools, DSH bridge).
 	HostTools []ToolSpec
+	// Model and Effort are optional; "" means the harness's own configured
+	// default, resolved by the adapter or bridge.
+	Model, Effort string
 }
 
 // Steerer is implemented by sessions that can fold a new message into the
@@ -132,10 +95,12 @@ type TaskStopper interface {
 	StopTask(ctx context.Context, id string) error
 }
 
-// Turn is one user message.
+// Turn is one user message. Guest marks a stranger's turn (stranger_guard):
+// every adapter must lock it natively so it cannot run commands, write
+// files or read the workdir; the Plexus policy callback is the real gate.
 type Turn struct {
 	Text  string
-	Level Level
+	Guest bool
 }
 
 // Session is one live conversation with a harness process.

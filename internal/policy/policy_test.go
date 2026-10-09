@@ -47,7 +47,7 @@ func TestTrustedMayDoEverything(t *testing.T) {
 				t.Fatalf("%s %s denied: %s", a.Source, k, d.Reason)
 			}
 		}
-		if p.Level(a) != harness.LevelFull {
+		if p.Guest(a) {
 			t.Fatal("trusted level must be full")
 		}
 	}
@@ -71,7 +71,7 @@ func TestStrangerGetsNoToolsButPost(t *testing.T) {
 			t.Fatalf("%s allowed", n)
 		}
 	}
-	if p.Level(stranger) != harness.LevelChat {
+	if !p.Guest(stranger) {
 		t.Fatal("stranger level must be chat")
 	}
 }

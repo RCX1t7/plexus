@@ -260,7 +260,7 @@ func (s *session) Send(ctx context.Context, t harness.Turn) (string, error) {
 	var res struct {
 		TurnID string `json:"turnId"`
 	}
-	if err := s.rpc.Call(tctx, "plexus.prompt", map[string]any{"sessionId": s.id, "text": t.Text, "level": t.Level.String(), "guest": t.Level != harness.LevelFull}, &res); err != nil {
+	if err := s.rpc.Call(tctx, "plexus.prompt", map[string]any{"sessionId": s.id, "text": t.Text, "level": map[bool]string{true: "chat", false: "full"}[t.Guest], "guest": t.Guest}, &res); err != nil {
 		s.turn.End(id)
 		return "", err
 	}

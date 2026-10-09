@@ -101,6 +101,9 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	if o.ResumeID != "" {
 		args = append(args, "--resume="+o.ResumeID) // = form: a dash-leading id is not a flag
 	}
+	if o.Model != "" {
+		args = append(args, "--model="+o.Model) // "" = Claude Code's configured default
+	}
 	if o.Persona != "" {
 		args = append(args, "--append-system-prompt", o.Persona)
 	}

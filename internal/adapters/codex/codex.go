@@ -66,20 +66,16 @@ func (a Adapter) Detect(ctx context.Context, env harness.Env) harness.DetectionR
 	return r
 }
 
-// Native sandbox / approval settings per Plexus level (defense in depth;
-// the policy callback still decides every approval request).
-func sandboxFor(l harness.Level, workdir string) (approval string, policy map[string]any) {
-	restricted := map[string]any{"type": "restricted", "includePlatformDefaults": true, "readableRoots": []string{workdir}}
-	switch l {
-	case harness.LevelFull:
+// Native sandbox / approval settings for a turn (defense in depth; the
+// policy callback still decides every approval request).
+func sandboxFor(guest bool, workdir string) (approval string, policy map[string]any) {
+	if !guest {
 		// "untrusted": every command Codex does not consider safe asks
 		// Plexus first, so the dangerous-action gate sees it.
 		return "untrusted", map[string]any{"type": "workspaceWrite", "writableRoots": []string{workdir}, "networkAccess": true}
-	case harness.LevelReadOnly:
-		return "untrusted", map[string]any{"type": "readOnly", "access": restricted}
-	default:
-		return "untrusted", map[string]any{"type": "readOnly", "access": restricted}
 	}
+	restricted := map[string]any{"type": "restricted", "includePlatformDefaults": true, "readableRoots": []string{workdir}}
+	return "untrusted", map[string]any{"type": "readOnly", "access": restricted}
 }
 
 func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (harness.Session, error) {
@@ -91,7 +87,7 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	if err != nil {
 		return nil, err
 	}
-	s := &session{p: p, rpc: harness.NewRPC(p, false), em: harness.NewEmitter(), workdir: o.Workdir, files: map[string]harness.ToolRequest{}}
+	s := &session{p: p, rpc: harness.NewRPC(p, false), em: harness.NewEmitter(), workdir: o.Workdir, effort: o.Effort, files: map[string]harness.ToolRequest{}}
 	p.OnDrop(func(n int64) { s.em.Emit(harness.DroppedFrame(n)) })
 	s.rpc.OnNotify = s.notify
 	s.rpc.OnRequest = s.request
@@ -117,8 +113,11 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	if err := s.rpc.Call(cctx, "account/read", map[string]any{"refreshToken": false}, &acct); err == nil && acct.Account == nil && acct.Requires {
 		return fail(errors.New("codex is not logged in (run `codex login`)"))
 	}
-	approval, _ := sandboxFor(harness.LevelChat, o.Workdir)
+	approval, _ := sandboxFor(true, o.Workdir)
 	params := map[string]any{"cwd": o.Workdir, "approvalPolicy": approval, "sandbox": "read-only"}
+	if o.Model != "" {
+		params["model"] = o.Model // "" = Codex's configured default
+	}
 	if o.Persona != "" {
 		params["developerInstructions"] = o.Persona
 	}
@@ -157,6 +156,7 @@ type session struct {
 	turn    harness.TurnState
 	workdir string
 	thread  string
+	effort  string // reasoning effort per turn ("" = Codex default)
 
 	mu     sync.Mutex
 	native string // native turn id of the running turn
@@ -192,7 +192,7 @@ func (s *session) Send(ctx context.Context, t harness.Turn) (string, error) {
 	s.mu.Lock()
 	s.turnID, s.last, s.final, s.errMsg, s.native = id, "", "", "", ""
 	s.mu.Unlock()
-	approval, sandbox := sandboxFor(t.Level, s.workdir)
+	approval, sandbox := sandboxFor(t.Guest, s.workdir)
 	var res struct {
 		Turn struct {
 			ID string `json:"id"`
@@ -201,6 +201,9 @@ func (s *session) Send(ctx context.Context, t harness.Turn) (string, error) {
 	params := map[string]any{"threadId": s.thread,
 		"input": []any{map[string]any{"type": "text", "text": t.Text}}, "cwd": s.workdir,
 		"approvalPolicy": approval, "sandboxPolicy": sandbox}
+	if s.effort != "" {
+		params["effort"] = s.effort
+	}
 	// turn/start runs on the caller's ctx, not the turn's: the turn can
 	// complete (and End cancel tctx) before this response arrives, and that
 	// must not turn a finished turn into "context canceled".

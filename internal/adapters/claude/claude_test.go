@@ -32,7 +32,7 @@ func TestArgsEnvAndInitialize(t *testing.T) {
 	o.ResumeID, o.Persona = "-dash-id", "be nice"
 	o.HostTools = []harness.ToolSpec{{Name: "plexus_post", InputSchema: json.RawMessage(`{"type":"object"}`)}}
 	s := start(t, o)
-	fin, _ := fakes.Driver{}.Turn(t, s, "[Plexus · from <@U1>]\nhello", harness.LevelFull)
+	fin, _ := fakes.Driver{}.Turn(t, s, "[Plexus · from <@U1>]\nhello", false)
 	if fin.Kind != harness.EventFinal || fin.Text != "echo: hello" {
 		t.Fatalf("%+v", fin)
 	}
@@ -65,11 +65,11 @@ func TestPermissionHookAndCanUseTool(t *testing.T) {
 		kinds = append(kinds, p.Tool.Kind)
 		return harness.Decision{Allow: p.Tool.Kind == harness.ToolRead, Reason: "test"}
 	}}
-	fin, _ := d.Turn(t, s, "TOOL shell rm -rf", harness.LevelFull)
+	fin, _ := d.Turn(t, s, "TOOL shell rm -rf", false)
 	if fin.Text != "hook:deny can_use_tool:deny" {
 		t.Fatalf("%q", fin.Text)
 	}
-	fin, _ = d.Turn(t, s, "TOOL read a.txt", harness.LevelFull)
+	fin, _ = d.Turn(t, s, "TOOL read a.txt", false)
 	if fin.Text != "hook:allow can_use_tool:allow" {
 		t.Fatalf("%q", fin.Text)
 	}
@@ -86,7 +86,7 @@ func TestQuestionRoundTrip(t *testing.T) {
 		}
 		return harness.Answers{qs[0].ID: {"Postgres"}}
 	}}
-	if fin, _ := d.Turn(t, s, "ASK", harness.LevelFull); fin.Text != "answer:allow:Postgres" {
+	if fin, _ := d.Turn(t, s, "ASK", false); fin.Text != "answer:allow:Postgres" {
 		t.Fatalf("%q", fin.Text)
 	}
 }
@@ -99,7 +99,7 @@ func TestHostToolViaSdkMcp(t *testing.T) {
 		in, _ := ev.Tool.Input.(map[string]any)
 		return harness.HostResult{Text: ev.Name + "=" + in["text"].(string)}
 	}}
-	fin, _ := d.Turn(t, s, `HOST plexus_post {"text":"hi"}`, harness.LevelFull)
+	fin, _ := d.Turn(t, s, `HOST plexus_post {"text":"hi"}`, false)
 	if fin.Text != "host:2:plexus_post=hi:false" {
 		t.Fatalf("%q", fin.Text)
 	}
@@ -115,7 +115,7 @@ func TestSteerAndInterrupt(t *testing.T) {
 			go func() { time.Sleep(50 * time.Millisecond); _ = st.Steer(context.Background(), "also do X") }()
 		}
 	}}
-	if fin, _ := d.Turn(t, s, "SLOW", harness.LevelFull); fin.Text != "steered: also do X" {
+	if fin, _ := d.Turn(t, s, "SLOW", false); fin.Text != "steered: also do X" {
 		t.Fatalf("%q", fin.Text)
 	}
 	d = fakes.Driver{OnEvent: func(ev harness.Event) {
@@ -123,7 +123,7 @@ func TestSteerAndInterrupt(t *testing.T) {
 			go func() { time.Sleep(50 * time.Millisecond); _ = s.Interrupt(context.Background()) }()
 		}
 	}}
-	if fin, _ := d.Turn(t, s, "SLOW", harness.LevelFull); fin.Kind != harness.EventError {
+	if fin, _ := d.Turn(t, s, "SLOW", false); fin.Kind != harness.EventError {
 		t.Fatalf("interrupt: %+v", fin)
 	}
 }
@@ -131,14 +131,14 @@ func TestSteerAndInterrupt(t *testing.T) {
 func TestBackgroundTasksAndStopTask(t *testing.T) {
 	s := start(t, fakes.Options(t, "claude"))
 	ts := s.(harness.TaskStopper)
-	fakes.Driver{}.Turn(t, s, "BG", harness.LevelFull)
+	fakes.Driver{}.Turn(t, s, "BG", false)
 	if got := ts.BackgroundTasks(); len(got) != 1 || got[0] != "task-1" {
 		t.Fatalf("tasks after turn: %v", got)
 	}
 	if err := ts.StopTask(context.Background(), "task-1"); err != nil {
 		t.Fatal(err)
 	}
-	fakes.Driver{}.Turn(t, s, "BGDONE", harness.LevelFull)
+	fakes.Driver{}.Turn(t, s, "BGDONE", false)
 	deadline := time.Now().Add(2 * time.Second)
 	for len(ts.BackgroundTasks()) != 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -150,7 +150,7 @@ func TestBackgroundTasksAndStopTask(t *testing.T) {
 
 func TestBareWarning(t *testing.T) {
 	s := start(t, fakes.Options(t, "claude", "PLEXUS_FAKE_BARE=1"))
-	_, evs := fakes.Driver{}.Turn(t, s, "hi", harness.LevelFull)
+	_, evs := fakes.Driver{}.Turn(t, s, "hi", false)
 	for _, e := range evs {
 		if e.Name == "plexus.warning" {
 			return
