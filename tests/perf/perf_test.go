@@ -97,13 +97,14 @@ func BenchmarkDurableDedupWrites(b *testing.B) {
 	rate := float64(b.N) / elapsed.Seconds()
 	b.ReportMetric(rate, "writes/s")
 	if b.N >= 2000 && rate < 2000 {
-		b.Logf("WARNING: durable writes %.0f/s below the 2000/s gate", rate)
+		b.Errorf("durable writes %.0f/s are below the 2000/s gate", rate)
 	}
 }
 
-// BenchmarkDedupThroughput measures the dedup check+write throughput the
-// architect reported at ~9.8k-11.9k ev/s on Linux (durable). The 20k ev/s
-// "internal" gate is the in-memory dispatch path, not this durable one.
+// BenchmarkDedupThroughput measures the dedup check+write throughput
+// (durable, ~50% duplicates). Informational only: dedup has no gate. The
+// 20k ev/s gate is in-memory routing (internal/slackbot
+// BenchmarkEventRouting); the disk gate is BenchmarkDurableDedupWrites.
 func BenchmarkDedupThroughput(b *testing.B) {
 	st, err := store.Open(filepath.Join(b.TempDir(), "plexus.db"))
 	if err != nil {

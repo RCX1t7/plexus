@@ -89,7 +89,7 @@ func (p *fakePoster) count(sub string) int {
 	return n
 }
 
-func openStore(t *testing.T) *store.Store {
+func openStore(t testing.TB) *store.Store {
 	t.Helper()
 	s, err := store.Open(filepath.Join(t.TempDir(), "plexus.db"))
 	if err != nil {
@@ -284,6 +284,21 @@ func (s *fakeSess) Send(ctx context.Context, t harness.Turn) (string, error) {
 				as = append(as, strings.Join(a["q"], ","))
 			}
 			final = "answered: " + strings.Join(as, " | ")
+		case len(f) > 1 && f[0] == "FLOOD":
+			// n harness events in one turn (tool use, extension and
+			// background events, as a busy coding turn streams them)
+			n, _ := strconv.Atoi(f[1])
+			for i := 0; i < n; i++ {
+				switch i % 4 {
+				case 0, 1:
+					s.emit(harness.Event{Kind: harness.EventToolUse, TurnID: id, Name: "bash"})
+				case 2:
+					s.emit(harness.Event{Kind: harness.EventExtension, TurnID: id, Name: "progress"})
+				default:
+					s.emit(harness.Event{Kind: harness.EventToolResult, TurnID: id})
+				}
+			}
+			final = fmt.Sprintf("flooded %d", n)
 		case len(f) > 0 && f[0] == "QUIET":
 			final = ""
 		}

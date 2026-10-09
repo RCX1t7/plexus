@@ -31,7 +31,7 @@ type team struct {
 	restart func()
 }
 
-func newTeam(t *testing.T, hostTools bool) *team {
+func newTeam(t testing.TB, hostTools bool) *team {
 	t.Helper()
 	StopGrace = 50 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
