@@ -3,6 +3,7 @@ package dsh
 import (
 	"testing"
 
+	"github.com/RCX1t7/plexus/internal/danger"
 	"github.com/RCX1t7/plexus/internal/harness"
 )
 
@@ -82,4 +83,45 @@ func samePaths(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestMapToolCallWorkdir: DSH bash's per-call `workdir` reaches the classifier
+// as ToolRequest.Workdir, so a relative delete resolves where DSH runs it. A
+// relative rm with a workdir outside the session workdir is dangerous; the
+// same rm with a workdir inside it is not.
+func TestMapToolCallWorkdir(t *testing.T) {
+	x := danger.Ctx{GOOS: "linux", Workdir: "/home/u/work"}
+	classify := func(name string, in map[string]any) (harness.ToolRequest, string) {
+		tr := mapTool(harness.ToolRequest{Name: name, Input: in})
+		h := danger.Classify(danger.Call{Kind: tr.Kind, Name: tr.Name, Command: tr.Command, Paths: tr.Paths,
+			Deletes: tr.Deletes, Input: tr.Input, Workdir: tr.Workdir}, x, danger.Rules{})
+		if h == nil {
+			return tr, ""
+		}
+		return tr, h.Rule
+	}
+	cases := []struct {
+		name, tool  string
+		in          map[string]any
+		wantWorkdir string
+		wantRule    string
+	}{
+		{"outside absolute", "bash", map[string]any{"command": "rm -rf build", "workdir": "/home/u/other"}, "/home/u/other", "fs.delete_outside"},
+		{"outside relative (..)", "bash", map[string]any{"command": "rm -rf work2", "workdir": ".."}, "..", "fs.delete_outside"},
+		{"inside absolute", "bash", map[string]any{"command": "rm -rf build", "workdir": "/home/u/work/sub"}, "/home/u/work/sub", ""},
+		{"inside relative", "bash", map[string]any{"command": "rm -rf build", "workdir": "sub"}, "sub", ""},
+		{"no per-call workdir", "bash", map[string]any{"command": "rm -rf build"}, "", ""},
+		{"persistent shell, padded", "bash_persistent", map[string]any{"command": "rm -rf build", "workdir": "  /tmp  "}, "/tmp", "fs.delete_outside"},
+		{"pwsh outside", "pwsh", map[string]any{"command": "Remove-Item -Recurse build", "workdir": "/srv"}, "/srv", "fs.delete_outside"},
+		{"cwd key", "bash", map[string]any{"command": "rm -r x", "cwd": "/var/tmp"}, "/var/tmp", "fs.delete_outside"},
+	}
+	for _, c := range cases {
+		tr, rule := classify(c.tool, c.in)
+		if tr.Workdir != c.wantWorkdir {
+			t.Errorf("%s: Workdir = %q, want %q", c.name, tr.Workdir, c.wantWorkdir)
+		}
+		if rule != c.wantRule {
+			t.Errorf("%s: rule = %q, want %q", c.name, rule, c.wantRule)
+		}
+	}
 }

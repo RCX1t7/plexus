@@ -56,6 +56,9 @@ func mapTool(tr harness.ToolRequest) harness.ToolRequest {
 	if k := internalKind(tr.Name); k != "" {
 		tr.Kind = k
 	}
+	if tr.Workdir == "" {
+		tr.Workdir = callWorkdir(tr.Input)
+	}
 	tr = harness.Normalize(tr)
 	if in, ok := tr.Input.(map[string]any); ok {
 		for _, k := range movePathArgs {
@@ -76,4 +79,23 @@ func mapTool(tr harness.ToolRequest) harness.ToolRequest {
 		}
 	}
 	return tr
+}
+
+// cwdArgs are the per-call working-directory arguments DSH tools take: bash,
+// bash_persistent, pwsh and pwsh_persistent accept "workdir" ("pass workdir
+// instead of using cd"); "cwd" covers MCP-style shells. DSH resolves a
+// relative one against the session workspace, which is exactly how the
+// classifier resolves ToolRequest.Workdir (against Ctx.Workdir).
+var cwdArgs = []string{"workdir", "cwd"}
+
+// callWorkdir returns the call's own working directory ("" = the session's),
+// so relative paths in the command resolve where DSH will actually run it.
+func callWorkdir(input any) string {
+	in, _ := input.(map[string]any)
+	for _, k := range cwdArgs {
+		if d, ok := in[k].(string); ok && strings.TrimSpace(d) != "" {
+			return strings.TrimSpace(d)
+		}
+	}
+	return ""
 }
