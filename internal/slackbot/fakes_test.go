@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -265,6 +266,24 @@ func (s *fakeSess) Send(ctx context.Context, t harness.Turn) (string, error) {
 			s.results = append(s.results, r)
 			s.mu.Unlock()
 			final = "host: " + r.Text
+		case len(f) > 1 && f[0] == "ASK":
+			n, _ := strconv.Atoi(f[1])
+			got := make(chan harness.Answers, n)
+			for i := 1; i <= n; i++ {
+				s.emit(harness.Event{Kind: harness.EventQuestion, ID: fmt.Sprintf("%s-q%d", id, i), TurnID: id,
+					Questions: []harness.Question{{ID: "q", Text: fmt.Sprintf("question %d?", i)}},
+					Answer:    func(a harness.Answers) { got <- a }})
+			}
+			var as []string
+			for i := 0; i < n; i++ {
+				a := <-got
+				if a == nil {
+					as = append(as, "<none>")
+					continue
+				}
+				as = append(as, strings.Join(a["q"], ","))
+			}
+			final = "answered: " + strings.Join(as, " | ")
 		case len(f) > 0 && f[0] == "QUIET":
 			final = ""
 		}

@@ -462,6 +462,23 @@ func (s *Store) OpenQuestions(bot string) ([]Question, error) {
 	return out, err
 }
 
+// OpenQuestionsInThread lists the open questions of every bot in a thread.
+func (s *Store) OpenQuestionsInThread(thread string) ([]Question, error) {
+	var out []Question
+	pfx := []byte(thread + "\x00")
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bQuestions).Cursor()
+		for k, v := c.Seek(pfx); k != nil && bytes.HasPrefix(k, pfx); k, v = c.Next() {
+			var q Question
+			if json.Unmarshal(v, &q) == nil && q.State == QuestionOpen {
+				out = append(out, q)
+			}
+		}
+		return nil
+	})
+	return out, err
+}
+
 // Prune deletes dedup and origin records older than age.
 func (s *Store) Prune(age time.Duration) error {
 	cut := s.now().Add(-age).UnixNano()

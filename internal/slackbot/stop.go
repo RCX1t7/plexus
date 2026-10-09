@@ -2,6 +2,7 @@ package slackbot
 
 import (
 	"context"
+	"github.com/RCX1t7/plexus/internal/store"
 	"sync"
 	"time"
 
@@ -118,11 +119,14 @@ func (s *Stops) Stop(ctx context.Context, rev interface{ Revoke(id, by string) e
 // native interrupt, and cancels the running turn.
 func (t *thread) softStop(ctx context.Context) {
 	t.mu.Lock()
-	s, cancel, q := t.sess, t.cancel, t.question
-	t.stopped, t.question, t.queue = true, nil, nil
+	s, cancel, qs := t.sess, t.cancel, t.questions
+	t.stopped, t.questions, t.queue = true, nil, nil
 	t.mu.Unlock()
-	if q != nil && q.ev.Answer != nil {
-		q.ev.Answer(nil)
+	for _, q := range qs {
+		_ = t.w.Store.SetQuestionState(t.key, t.w.Bot.Name, q.qid, store.QuestionLost)
+		if q.ev.Answer != nil {
+			q.ev.Answer(nil)
+		}
 	}
 	if s != nil {
 		ictx, done := context.WithTimeout(ctx, StopGrace)

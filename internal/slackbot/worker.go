@@ -111,18 +111,18 @@ type thread struct {
 	w                *Worker
 	key, channel, ts string
 
-	mu       sync.Mutex
-	queue    []job
-	wake     chan struct{}
-	sess     harness.Session
-	cancel   context.CancelFunc
-	cur      *job // job of the running turn
-	last     *job // last job that ran (authority for self-started turns)
-	root     string
-	question *pendingQuestion
-	recent   []string // normalized hashes of recent partner chatter
-	work     bool     // work evidence (tool events) since the last partner message
-	stopped  bool
+	mu        sync.Mutex
+	queue     []job
+	wake      chan struct{}
+	sess      harness.Session
+	cancel    context.CancelFunc
+	cur       *job // job of the running turn
+	last      *job // last job that ran (authority for self-started turns)
+	root      string
+	questions []*pendingQuestion // FIFO: oldest is answered first
+	recent    []string           // normalized hashes of recent partner chatter
+	work      bool               // work evidence (tool events) since the last partner message
+	stopped   bool
 	// pendingHandoff is the handoff record the next reply/handoff post carries.
 	pendingHandoff string
 }
@@ -215,6 +215,16 @@ func (w *Worker) Handle(ctx context.Context, in Inbound) {
 	if fresh, err := w.Store.MarkSeen(w.Bot.Name, in.Channel+":"+in.TS); err != nil || !fresh {
 		return // duplicate delivery (Slack retry, reconnect or restart)
 	}
+	onlyOthers := false // the message @-mentions other partners, not this one
+	if !mentioned {
+		for _, id := range mentions(in.Text) {
+			if !w.Peers.Has(id) {
+				onlyOthers = false
+				break
+			}
+			onlyOthers = true
+		}
+	}
 	in.Text = strings.TrimSpace(strings.ReplaceAll(in.Text, "<@"+w.SelfID+">", ""))
 	auth, ho := w.authority(ctx, in)
 
@@ -235,7 +245,7 @@ func (w *Worker) Handle(ctx context.Context, in Inbound) {
 	if t == nil {
 		t = w.thread(ctx, key, in)
 	}
-	if t.answer(in, auth) {
+	if t.answer(in, auth, mentioned, onlyOthers) {
 		return
 	}
 	// The task tree: stopped trees start no new turns until Sin speaks again.
@@ -422,18 +432,45 @@ func (t *thread) idleEcho(text string) bool {
 	return false
 }
 
-// answer routes a reply to a pending harness question.
-func (t *thread) answer(in Inbound, a policy.Authority) bool {
-	t.mu.Lock()
-	q := t.question
-	ok := q != nil && (in.User == q.asker || a.Source == policy.FromSin)
-	if ok {
-		t.question = nil
-	}
-	t.mu.Unlock()
-	if !ok {
+// answer routes a reply to this partner's oldest pending harness question.
+// Routing rule (review #10):
+//   - a reply that @-mentions only other partners is never an answer;
+//   - while other partners also have open questions in the thread, the
+//     reply must @-mention the asking partner;
+//   - otherwise plain text answers this partner's oldest open question
+//     (pending questions are a queue, not a single slot).
+func (t *thread) answer(in Inbound, a policy.Authority, mentioned, onlyOthers bool) bool {
+	if onlyOthers {
 		return false
 	}
+	t.mu.Lock()
+	idx := -1
+	for i, q := range t.questions {
+		if in.User == q.asker || a.Source == policy.FromSin {
+			idx = i
+			break
+		}
+	}
+	t.mu.Unlock()
+	if idx < 0 {
+		return false
+	}
+	if !mentioned {
+		open, _ := t.w.Store.OpenQuestionsInThread(t.key)
+		for _, q := range open {
+			if q.Bot != t.w.Bot.Name {
+				return false // another partner is waiting too: Sin must @ the one that asked
+			}
+		}
+	}
+	t.mu.Lock()
+	if idx >= len(t.questions) {
+		t.mu.Unlock()
+		return false
+	}
+	q := t.questions[idx]
+	t.questions = append(t.questions[:idx:idx], t.questions[idx+1:]...)
+	t.mu.Unlock()
 	ans := harness.Answers{}
 	for _, qq := range q.ev.Questions {
 		ans[qq.ID] = parseAnswer(in.Text, qq)
@@ -547,9 +584,12 @@ func (t *thread) dropSession() {
 // closeSession ends the harness session and its whole process tree.
 func (t *thread) closeSession() {
 	t.mu.Lock()
-	s := t.sess
-	t.sess = nil
+	s, qs := t.sess, t.questions
+	t.sess, t.questions = nil, nil
 	t.mu.Unlock()
+	for _, q := range qs { // the asking process is gone
+		_ = t.w.Store.SetQuestionState(t.key, t.w.Bot.Name, q.qid, store.QuestionLost)
+	}
 	if s != nil {
 		_ = s.Close()
 		t.w.releaseWorkdir(t)
@@ -680,7 +720,7 @@ func (w *Worker) ask(t *thread, j job, ev harness.Event) {
 	}
 	qid := firstNonEmpty(ev.ID, RequestID(j.in.TS, "q"))
 	t.mu.Lock()
-	t.question = &pendingQuestion{ev: ev, asker: asker, qid: qid}
+	t.questions = append(t.questions, &pendingQuestion{ev: ev, asker: asker, qid: qid})
 	t.mu.Unlock()
 	text := formatQuestions(ev.Questions)
 	if asker == "" && len(w.Owners) > 0 {
