@@ -155,3 +155,44 @@ func join2(a []string) string {
 	}
 	return s
 }
+
+// A call with its own working directory (DSH bash workdir, MCP shell cwd):
+// relative paths resolve against it, falling back to Ctx.Workdir.
+func TestCallWorkdir(t *testing.T) {
+	lin := Ctx{GOOS: "linux", Workdir: "/home/u/work"}
+	win := Ctx{GOOS: "windows", Workdir: `C:\Users\u\work`}
+	call := func(r harness.ToolRequest) Call {
+		r = harness.Normalize(r)
+		return Call{Kind: r.Kind, Name: r.Name, Command: r.Command, Paths: r.Paths, Deletes: r.Deletes, Input: r.Input, Workdir: r.Workdir}
+	}
+	bash := func(cmd, wd string) Call {
+		return call(harness.ToolRequest{Name: "bash", Input: map[string]any{"command": cmd, "workdir": wd}})
+	}
+	cases := []struct {
+		name string
+		c    Call
+		x    Ctx
+		want string
+	}{
+		{"relative rm in outside workdir", bash("rm -rf build", "/home/u/other"), lin, "fs.delete_outside"},
+		{"relative rm in sub workdir", bash("rm -rf build", "sub"), lin, ""},
+		{"relative rm in parent workdir", bash("rm -rf work2", ".."), lin, "fs.delete_outside"},
+		{"relative rm, no call workdir", bash("rm -rf build", ""), lin, ""},
+		{"unexpanded call workdir fails closed", bash("rm -rf build", "~/x"), lin, "fs.delete_outside"},
+		{"cd inside call workdir", bash("cd .. && rm -rf work/x", "/home/u/work/sub"), lin, ""},
+		{"windows call workdir", bash(`Remove-Item -Recurse x`, `D:\other`), win, "fs.delete_outside"},
+		{"windows call workdir inside", bash(`Remove-Item -Recurse x`, `C:\Users\U\Work\sub`), win, ""},
+		{"cwd key", call(harness.ToolRequest{Name: "run_command", Input: map[string]any{"cmd": "rm -r x", "cwd": "/tmp"}}), lin, "fs.delete_outside"},
+		{"write path in system workdir", call(harness.ToolRequest{Name: "write_file", Input: map[string]any{"path": "hosts", "workdir": "/etc"}}), lin, "sys.dir"},
+	}
+	for _, c := range cases {
+		h := Classify(c.c, c.x, Rules{})
+		got := ""
+		if h != nil {
+			got = h.Rule
+		}
+		if got != c.want {
+			t.Errorf("%s: got %q want %q (%v; %+v)", c.name, got, c.want, h, c.c)
+		}
+	}
+}

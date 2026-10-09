@@ -29,6 +29,9 @@ type Call struct {
 	Paths   []string // files the call writes or deletes
 	Deletes []string // the subset of files the call deletes (or moves away)
 	Input   any      // raw native input (recipient lookup only)
+	// Workdir is the call's own working directory; relative paths resolve
+	// against it (itself relative to Ctx.Workdir). "" = Ctx.Workdir.
+	Workdir string
 }
 
 // Ctx carries the facts Classify may use.
@@ -89,17 +92,21 @@ func Classify(c Call, x Ctx, r Rules) *Hit {
 		if l := strings.ToLower(c.Command); strings.Contains(l, "setenvironmentvariable") && strings.Contains(l, "machine") {
 			hits = append(hits, &Hit{"sys.env", "sets a machine-wide environment variable", strings.Join(strings.Fields(l), " ")})
 		}
-		sh := &shell{cwd: x.Workdir}
+		start := x.Workdir
+		if c.Workdir != "" {
+			start = join(x.Workdir, c.Workdir, x.GOOS) // "" if it cannot be resolved: unknown, fail closed
+		}
+		sh := &shell{cwd: start}
 		for _, seg := range Segments(c.Command) {
 			hits = append(hits, classifyArgv(seg, x, sh))
 		}
 		for _, p := range c.Deletes {
-			hits = append(hits, deleteRule(p, x, &shell{cwd: x.Workdir}))
+			hits = append(hits, deleteRule(p, x, &shell{cwd: start}))
 		}
 		if c.Kind == harness.ToolWrite || len(c.Deletes) > 0 {
 			for _, p := range c.Paths {
-				if systemDir(p, x.GOOS) {
-					hits = append(hits, &Hit{"sys.dir", "writes into a system directory: " + p, normTarget(p, x, nil)})
+				if sysPath(p, x, &shell{cwd: start}) {
+					hits = append(hits, &Hit{"sys.dir", "writes into a system directory: " + p, normTarget(p, x, &shell{cwd: start})})
 				}
 			}
 		}

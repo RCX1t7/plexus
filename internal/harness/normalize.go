@@ -35,6 +35,16 @@ func Normalize(r ToolRequest) ToolRequest {
 			}
 		}
 	}
+	if r.Workdir == "" && in != nil {
+		// per-call working directory (DSH bash, MCP shells): relative paths
+		// in the call resolve against it, not the session's workdir
+		for _, k := range []string{"workdir", "cwd"} {
+			if d, ok := in[k].(string); ok && strings.TrimSpace(d) != "" {
+				r.Workdir = strings.TrimSpace(d)
+				break
+			}
+		}
+	}
 	patchPaths(&r, in)
 	if r.Kind == "" || r.Kind == ToolOther {
 		n := strings.ToLower(r.Name)

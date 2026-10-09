@@ -65,7 +65,7 @@ func (w *Worker) gate(t *thread, j job, ev harness.Event, d harness.Decision) bo
 		return false
 	}
 	tool := harness.Normalize(ev.Perm.Tool) // idempotent: fills what the adapter left out
-	call := danger.Call{Kind: tool.Kind, Name: tool.Name, Command: tool.Command, Paths: tool.Paths, Deletes: tool.Deletes, Input: tool.Input}
+	call := danger.Call{Kind: tool.Kind, Name: tool.Name, Command: tool.Command, Paths: tool.Paths, Deletes: tool.Deletes, Input: tool.Input, Workdir: tool.Workdir}
 	hit := danger.Classify(call, danger.Ctx{GOOS: w.Policy.GOOS, Workdir: w.Policy.Workdir, Git: runGit}, w.Danger)
 	if hit == nil {
 		return false

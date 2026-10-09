@@ -40,6 +40,7 @@ type ToolRequest struct {
 	Paths   []string `json:"paths,omitempty"`   // file paths the call touches
 	Command string   `json:"command,omitempty"` // shell command, if any
 	Deletes []string `json:"deletes,omitempty"` // the subset of Paths the call deletes (or moves away)
+	Workdir string   `json:"workdir,omitempty"` // the call's own working directory ("" = the session's)
 	Input   any      `json:"input,omitempty"`   // raw native input (display only)
 }
 
