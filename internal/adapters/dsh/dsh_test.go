@@ -12,6 +12,12 @@ import (
 	"github.com/RCX1t7/plexus/internal/harness"
 )
 
+// Turn authority: Turn.Guest is the only flag (owner = false, stranger = true).
+const (
+	owner = false
+	guest = true
+)
+
 func TestMain(m *testing.M) {
 	fakes.MaybeRun()
 	// The plugin is bundled, so every StartSession installs the profile into
@@ -37,7 +43,7 @@ func TestGateAndGuestOverTheFake(t *testing.T) {
 	parked := fakes.Driver{Decide: func(harness.PermissionRequest) harness.Decision {
 		return harness.Decision{Allow: false, Reason: "已暂挂，等 Sin 批准"}
 	}}
-	if fin, _ := parked.Turn(t, s, "PERM git push --force origin main", false); fin.Text != "gate:false:已暂挂，等 Sin 批准" {
+	if fin, _ := parked.Turn(t, s, "PERM git push --force origin main", owner); fin.Text != "gate:false:已暂挂，等 Sin 批准" {
 		t.Fatalf("gate parked: %q", fin.Text)
 	}
 	// The classifier gets the typed command through the event.
@@ -46,14 +52,35 @@ func TestGateAndGuestOverTheFake(t *testing.T) {
 		gotCmd = pr.Tool.Command
 		return harness.Decision{Allow: true}
 	}}
-	if fin, _ := seen.Turn(t, s, "PERM git -C sub push -f", false); fin.Text != "gate:true:" || gotCmd != "git -C sub push -f" {
+	if fin, _ := seen.Turn(t, s, "PERM git -C sub push -f", owner); fin.Text != "gate:true:" || gotCmd != "git -C sub push -f" {
 		t.Fatalf("gate allow: %q cmd=%q", fin.Text, gotCmd)
 	}
 	// A stranger's (guest) turn: a non-read native tool is denied natively, never asked.
 	asked := false
 	guard := fakes.Driver{Decide: func(harness.PermissionRequest) harness.Decision { asked = true; return harness.Decision{Allow: true} }}
-	if fin, _ := guard.Turn(t, s, "TOOL write /etc/passwd", true); fin.Text != "guest-denied:write" || asked {
+	if fin, _ := guard.Turn(t, s, "TOOL write /etc/passwd", guest); fin.Text != "guest-denied:write" || asked {
 		t.Fatalf("guest lock: %q asked=%v", fin.Text, asked)
+	}
+}
+
+// TestEarlyFinalDoesNotCancelPrompt is review must-fix #13: the bridge streams
+// the turn's final before answering plexus.prompt. The final ends the turn
+// (cancelling the turn ctx); plexus.prompt must still complete on the caller's
+// ctx, so Send succeeds and the final is delivered, not "context canceled".
+func TestEarlyFinalDoesNotCancelPrompt(t *testing.T) {
+	s, err := Adapter{}.StartSession(context.Background(), fakes.Options(t, "dsh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := 0; i < 3; i++ {
+		if fin, _ := (fakes.Driver{}).Turn(t, s, "FASTFINAL", owner); fin.Kind != harness.EventFinal || fin.Text != "fast" {
+			t.Fatalf("run %d: %+v", i, fin)
+		}
+	}
+	// the session is still usable afterwards
+	if fin, _ := (fakes.Driver{}).Turn(t, s, "hi", owner); fin.Text != "echo: hi" {
+		t.Fatalf("after: %q", fin.Text)
 	}
 }
 
@@ -85,23 +112,23 @@ func TestBridgeTurnPermissionHostToolSteer(t *testing.T) {
 	}
 	defer s.Close()
 	// events race ahead of the plexus.prompt reply: they must still map to the turn
-	fin, evs := fakes.Driver{}.Turn(t, s, "hi", false)
+	fin, evs := fakes.Driver{}.Turn(t, s, "hi", owner)
 	if fin.Text != "echo: hi" || evs[0].Kind != harness.EventTextDelta || evs[0].TurnID == "" {
 		t.Fatalf("%+v %+v", fin, evs)
 	}
 	d := fakes.Driver{Decide: func(p harness.PermissionRequest) harness.Decision { return harness.Decision{Allow: false} }}
-	if fin, _ := d.Turn(t, s, "TOOL read a", false); fin.Text != "allow:false" {
+	if fin, _ := d.Turn(t, s, "TOOL read a", owner); fin.Text != "allow:false" {
 		t.Fatalf("%q", fin.Text)
 	}
 	h := fakes.Driver{Host: func(ev harness.Event) harness.HostResult { return harness.HostResult{Text: ev.Name} }}
-	if fin, _ := h.Turn(t, s, `HOST plexus_post {"text":"x"}`, false); fin.Text != "host:plexus_post:false" {
+	if fin, _ := h.Turn(t, s, `HOST plexus_post {"text":"x"}`, owner); fin.Text != "host:plexus_post:false" {
 		t.Fatalf("%q", fin.Text)
 	}
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		_ = s.(harness.Steerer).Steer(context.Background(), "more")
 	}()
-	if fin, _ := (fakes.Driver{}).Turn(t, s, "SLOW", false); fin.Text != "steered: more" {
+	if fin, _ := (fakes.Driver{}).Turn(t, s, "SLOW", owner); fin.Text != "steered: more" {
 		t.Fatalf("%q", fin.Text)
 	}
 }

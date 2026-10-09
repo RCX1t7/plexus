@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // server is a tiny JSON-RPC peer for the codex/acp/dsh fakes.
@@ -252,6 +253,8 @@ func acp(s *server, method string, p map[string]any) (any, *rpcErr) {
 //	PERM <command...>     plexus.permission {name:"bash",kind:"shell",command}; final "gate:<bool>:<reason>"
 //	                      (drives the dangerous-action gate: e.g. "PERM git push --force")
 //	BIGFRAME              emit one oversize (>32 MiB) plexus.event, then final "after-bigframe"
+//	FASTFINAL             emit the final "fast" BEFORE answering plexus.prompt, then
+//	                      answer 300ms later (an early turn end must not lose the final)
 //
 // A guest turn (prompt "guest":true) denies every tool except plexus_post
 // without asking Plexus (the native guest lock), final "guest-denied:<tool>".
@@ -294,6 +297,11 @@ func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 	case "plexus.prompt":
 		text := lastLine(toString(p["text"]))
 		guest := p["guest"] == true
+		if text == "FASTFINAL" {
+			s.notify("plexus.event", map[string]any{"turnId": "bt-1", "kind": "final", "text": "fast"})
+			time.Sleep(300 * time.Millisecond)
+			return map[string]any{"turnId": "bt-1"}, nil
+		}
 		go func() {
 			reply := "echo: " + text
 			f := fields(text)

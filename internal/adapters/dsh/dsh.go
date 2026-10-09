@@ -260,7 +260,11 @@ func (s *session) Send(ctx context.Context, t harness.Turn) (string, error) {
 	var res struct {
 		TurnID string `json:"turnId"`
 	}
-	if err := s.rpc.Call(tctx, "plexus.prompt", map[string]any{"sessionId": s.id, "text": t.Text, "level": map[bool]string{true: "chat", false: "full"}[t.Guest], "guest": t.Guest}, &res); err != nil {
+	// plexus.prompt runs on the caller's ctx, not the turn's (review #13, same
+	// as the Codex fix b6d2ee7): the bridge streams events ahead of its reply,
+	// so the turn can reach its final (and End cancel tctx) before the reply
+	// arrives; that must not turn a finished turn into "context canceled".
+	if err := s.rpc.Call(ctx, "plexus.prompt", map[string]any{"sessionId": s.id, "text": t.Text, "level": map[bool]string{true: "chat", false: "full"}[t.Guest], "guest": t.Guest}, &res); err != nil {
 		s.turn.End(id)
 		return "", err
 	}
