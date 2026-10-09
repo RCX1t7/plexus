@@ -256,8 +256,10 @@ func acp(s *server, method string, p map[string]any) (any, *rpcErr) {
 //	FASTFINAL             emit the final "fast" BEFORE answering plexus.prompt, then
 //	                      answer 300ms later (an early turn end must not lose the final)
 //
-// A guest turn (prompt "guest":true) denies every tool except plexus_post
-// without asking Plexus (the native guest lock), final "guest-denied:<tool>".
+// plexus.prompt takes {sessionId, text, guest}; a "level" member is rejected
+// (-32602): authority is Turn.Guest only. A guest turn (prompt "guest":true)
+// denies every tool, reads included, except the plexus_post host tool, without
+// asking Plexus (the native guest lock), final "guest-denied:<tool>".
 func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 	switch method {
 	case "plexus.initialize":
@@ -295,6 +297,9 @@ func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 	case "plexus.control":
 		return map[string]any{"name": p["name"]}, nil
 	case "plexus.prompt":
+		if _, ok := p["level"]; ok {
+			return nil, &rpcErr{Code: -32602, Message: "plexus.prompt: level is not part of the protocol (use guest)"}
+		}
 		text := lastLine(toString(p["text"]))
 		guest := p["guest"] == true
 		if text == "FASTFINAL" {
@@ -316,11 +321,15 @@ func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 				}
 				reply = "steered: " + st
 			case len(f) >= 2 && f[0] == "HOST":
-				// Host tools (e.g. plexus_post) are allowed even for guests.
+				// Only plexus_post is allowed in a guest turn.
+				if guest && f[1] != "plexus_post" {
+					reply = "guest-denied:" + f[1]
+					break
+				}
 				r := s.call("plexus.tool", map[string]any{"turnId": "bt-1", "id": "t1", "name": f[1], "arguments": hostArgs(f)})
 				reply = "host:" + toString(r["text"]) + ":" + toString(r["isError"])
 			case len(f) >= 3 && f[0] == "TOOL":
-				if guest && f[1] != "read" {
+				if guest {
 					reply = "guest-denied:" + f[1]
 					break
 				}
@@ -330,7 +339,7 @@ func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 			case len(f) >= 2 && f[0] == "PERM":
 				command := strings.TrimSpace(strings.TrimPrefix(text, "PERM"))
 				if guest {
-					// The native guest lock denies every non-read tool; plexus_post is a host tool, not this path.
+					// The native guest lock denies every native tool; only plexus_post (a host tool) is open.
 					s.notify("plexus.event", map[string]any{"turnId": "bt-1", "kind": "final", "text": "guest-denied:bash"})
 					return
 				}

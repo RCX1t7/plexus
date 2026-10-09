@@ -2,8 +2,10 @@ package dsh
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,11 +57,63 @@ func TestGateAndGuestOverTheFake(t *testing.T) {
 	if fin, _ := seen.Turn(t, s, "PERM git -C sub push -f", owner); fin.Text != "gate:true:" || gotCmd != "git -C sub push -f" {
 		t.Fatalf("gate allow: %q cmd=%q", fin.Text, gotCmd)
 	}
-	// A stranger's (guest) turn: a non-read native tool is denied natively, never asked.
+	// A stranger's (Turn.Guest) turn: every native tool -- shell, write and
+	// read alike -- is denied natively by the bridge and never reaches the
+	// Plexus gate; only the plexus_post host tool stays open.
 	asked := false
-	guard := fakes.Driver{Decide: func(harness.PermissionRequest) harness.Decision { asked = true; return harness.Decision{Allow: true} }}
-	if fin, _ := guard.Turn(t, s, "TOOL write /etc/passwd", guest); fin.Text != "guest-denied:write" || asked {
-		t.Fatalf("guest lock: %q asked=%v", fin.Text, asked)
+	guard := fakes.Driver{
+		Decide: func(harness.PermissionRequest) harness.Decision { asked = true; return harness.Decision{Allow: true} },
+		Host:   func(ev harness.Event) harness.HostResult { return harness.HostResult{Text: ev.Name} },
+	}
+	for prompt, want := range map[string]string{
+		"TOOL write /etc/passwd":     "guest-denied:write",
+		"TOOL read notes.txt":        "guest-denied:read",
+		"PERM rm -rf build":          "guest-denied:bash",
+		`HOST plexus_task {"a":1}`:   "guest-denied:plexus_task",
+		`HOST plexus_post {"t":"x"}`: "host:plexus_post:false",
+	} {
+		if fin, _ := guard.Turn(t, s, prompt, guest); fin.Text != want {
+			t.Errorf("guest %q: got %q, want %q", prompt, fin.Text, want)
+		}
+	}
+	if asked {
+		t.Fatal("guest turn reached the Plexus permission gate; the native lock must deny first")
+	}
+}
+
+// TestPromptWireCarriesGuestNotLevel: plexus.prompt sends Turn.Guest as
+// "guest" and no "level" (the fake also rejects level with -32602).
+func TestPromptWireCarriesGuestNotLevel(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "fake.log")
+	o := fakes.Options(t, "dsh", "PLEXUS_FAKE_LOG="+log)
+	s, err := Adapter{}.StartSession(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	fakes.Driver{}.Turn(t, s, "as owner", owner)
+	fakes.Driver{}.Turn(t, s, "as guest", guest)
+	b, _ := os.ReadFile(log + ".msgs")
+	var got []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var m struct {
+			Method string         `json:"method"`
+			Params map[string]any `json:"params"`
+		}
+		if json.Unmarshal([]byte(line), &m) == nil && m.Method == "plexus.prompt" {
+			got = append(got, m.Params)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 prompts, got %d: %s", len(got), b)
+	}
+	for i, wantGuest := range []bool{owner, guest} {
+		if _, has := got[i]["level"]; has {
+			t.Errorf("prompt %d still carries level: %v", i, got[i])
+		}
+		if g, ok := got[i]["guest"].(bool); !ok || g != wantGuest {
+			t.Errorf("prompt %d guest = %v, want %v", i, got[i]["guest"], wantGuest)
+		}
 	}
 }
 

@@ -9,13 +9,12 @@
 // bridge plugin speaking the Plexus bridge protocol: JSON-RPC 2.0 over
 // stdio whose payloads mirror the normalized harness event model 1:1.
 //
-// STATUS: UNVERIFIED. The Go side below is complete and tested against a
-// fake; the DSH-side plugin (plugins/dsh-bridge, TypeScript) is not written
-// yet. See docs/DSH_BRIDGE.md for the protocol.
+// The bridge plugin is embedded (bridge/plexus-bridge.min.mjs) and installed
+// into the plexus profile on start. See docs/DSH_BRIDGE.md for the protocol.
 //
 //	client -> dsh  plexus.initialize   {protocol, client}            -> {protocol, capabilities}
 //	client -> dsh  plexus.session.open {cwd, persona, resume, tools} -> {sessionId}
-//	client -> dsh  plexus.prompt       {sessionId, text, level}      -> {turnId}
+//	client -> dsh  plexus.prompt       {sessionId, text, guest}      -> {turnId}
 //	client -> dsh  plexus.cancel       {sessionId}                   -> {}
 //	client -> dsh  plexus.steer        {sessionId, text}             -> {}
 //	client -> dsh  plexus.stopTask     {sessionId, taskId}           -> {}
@@ -264,7 +263,9 @@ func (s *session) Send(ctx context.Context, t harness.Turn) (string, error) {
 	// as the Codex fix b6d2ee7): the bridge streams events ahead of its reply,
 	// so the turn can reach its final (and End cancel tctx) before the reply
 	// arrives; that must not turn a finished turn into "context canceled".
-	if err := s.rpc.Call(ctx, "plexus.prompt", map[string]any{"sessionId": s.id, "text": t.Text, "level": map[bool]string{true: "chat", false: "full"}[t.Guest], "guest": t.Guest}, &res); err != nil {
+	// Guest is the only authority flag on the wire: a guest turn is locked
+	// natively by the bridge (only plexus_post); there is no level.
+	if err := s.rpc.Call(ctx, "plexus.prompt", map[string]any{"sessionId": s.id, "text": t.Text, "guest": t.Guest}, &res); err != nil {
 		s.turn.End(id)
 		return "", err
 	}
