@@ -110,6 +110,9 @@ func Classify(c Call, x Ctx, r Rules) *Hit {
 				}
 			}
 		}
+		if h := pluginManager(c); h != nil {
+			hits = append(hits, h)
+		}
 		if (c.Kind == harness.ToolOther || c.Kind == harness.ToolWrite || c.Kind == harness.ToolFetch) && mcpSend.MatchString(c.Name) {
 			hits = append(hits, &Hit{"out.mcp", "tool " + c.Name + " looks like it sends a message", strings.TrimSpace(c.Name + " " + recipient(c.Input))})
 		}
@@ -134,6 +137,28 @@ func Classify(c Call, x Ctx, r Rules) *Hit {
 		}
 	}
 	return nil
+}
+
+// pluginManager flags harness plugin management (DSH tool-plugin-manager,
+// tool name plugin_manager): installing, enabling or removing plugins
+// changes installed software and runs host code outside the sandbox.
+// Listing is read-only.
+func pluginManager(c Call) *Hit {
+	n := strings.ToLower(strings.NewReplacer("-", "_", ".", "_").Replace(c.Name))
+	if i := strings.LastIndex(n, "__"); i >= 0 {
+		n = n[i+2:] // mcp__server__tool
+	}
+	if n != "plugin_manager" && n != "tool_plugin_manager" {
+		return nil
+	}
+	in, _ := c.Input.(map[string]any)
+	action, _ := in["action"].(string)
+	if strings.HasPrefix(action, "list_") {
+		return nil
+	}
+	target, _ := in["target"].(string)
+	return &Hit{"sys.installer", "manages harness plugins (" + firstNonEmpty(action, "unknown action") + ")",
+		strings.TrimSpace("plugin_manager " + action + " " + target)}
 }
 
 // recipient picks the addressee out of an MCP tool's input, if any.
