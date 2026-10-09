@@ -158,3 +158,14 @@ func TestBareWarning(t *testing.T) {
 	}
 	t.Fatal("no bare-mode warning")
 }
+
+func TestPlexusHostToolsAreMeta(t *testing.T) {
+	for _, n := range []string{"plexus_post", "plexus_delegate", "plexus_ack", "plexus_deliver", "plexus_review", "plexus_stop_tree"} {
+		if k := toolRequest("mcp__plexus__"+n, map[string]any{}).Kind; k != harness.ToolMeta {
+			t.Errorf("%s: kind %s", n, k)
+		}
+	}
+	if k := toolRequest("mcp__other__plexus_post", map[string]any{}).Kind; k == harness.ToolMeta {
+		t.Error("a foreign MCP server's tool became Meta")
+	}
+}

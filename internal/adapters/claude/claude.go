@@ -635,8 +635,12 @@ func toolRequest(name string, in map[string]any) harness.ToolRequest {
 		r.Kind = harness.ToolFetch
 	case "AskUserQuestion":
 		r.Kind = harness.ToolAsk
-	case "TodoWrite", "ExitPlanMode", "Agent", "Task", "Skill",
-		"mcp__plexus__plexus_post", "mcp__plexus__plexus_delegate", "mcp__plexus__plexus_deliver", "mcp__plexus__plexus_stop_tree":
+	case "TodoWrite", "ExitPlanMode", "Agent", "Task", "Skill":
+		r.Kind = harness.ToolMeta
+	}
+	if strings.HasPrefix(name, "mcp__plexus__plexus_") {
+		// Plexus host tools (post, delegate, ack, deliver, review,
+		// stop_tree) on Plexus's own in-process MCP server
 		r.Kind = harness.ToolMeta
 	}
 	return r
