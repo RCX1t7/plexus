@@ -92,6 +92,11 @@ func Classify(c Call, x Ctx, r Rules) *Hit {
 			// an execute call whose command the adapter could not read
 			hits = append(hits, &Hit{"exec.opaque", "runs a command Plexus cannot see (" + c.Name + ")", c.Name})
 		}
+		if c.Kind == harness.ToolWrite && c.Name == "fileChange" && len(c.Paths) == 0 && len(c.Deletes) == 0 {
+			// a Codex file change whose item was never seen (no paths, no
+			// change kinds): fail closed instead of allowing it blind
+			hits = append(hits, &Hit{"exec.opaque", "changes files Plexus cannot see (fileChange without known paths)", c.Name})
+		}
 		if l := strings.ToLower(c.Command); strings.Contains(l, "setenvironmentvariable") && strings.Contains(l, "machine") {
 			hits = append(hits, &Hit{"sys.env", "sets a machine-wide environment variable", strings.Join(strings.Fields(l), " ")})
 		}

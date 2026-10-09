@@ -91,6 +91,8 @@ func TestDeletePaths(t *testing.T) {
 			Command: "apply_patch <<'EOF'\n*** Begin Patch\n*** Delete File: /home/u/other/y\n*** End Patch\nEOF"}), "fs.delete_outside"},
 		{"codex fileChange delete", Call{Kind: harness.ToolWrite, Name: "fileChange", Paths: []string{"../x"}, Deletes: []string{"../x"}}, "fs.delete_outside"},
 		{"codex fileChange edit", Call{Kind: harness.ToolWrite, Name: "fileChange", Paths: []string{"../x"}}, ""},
+		{"codex fileChange unknown item", Call{Kind: harness.ToolWrite, Name: "fileChange", Input: map[string]any{"itemId": "never-started"}}, "exec.opaque"},
+		{"write tool without paths (not fileChange)", Call{Kind: harness.ToolWrite, Name: "mcp__notion__create_page"}, ""},
 		{"mcp delete outside", call(harness.ToolRequest{Name: "mcp__fs__delete_file", Kind: harness.ToolOther, Input: map[string]any{"path": "/home/u/other"}}), "fs.delete_outside"},
 		{"mcp delete inside", call(harness.ToolRequest{Name: "mcp__fs__delete_file", Kind: harness.ToolOther, Input: map[string]any{"path": "tmp/a"}}), ""},
 		{"mcp rm outside", call(harness.ToolRequest{Name: "fs_rm", Input: map[string]any{"paths": []any{"/tmp/x"}}}), "fs.delete_outside"},
