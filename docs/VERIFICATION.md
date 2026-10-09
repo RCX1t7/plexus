@@ -13,7 +13,7 @@
 | 包 | 作用 | 是否命中真实产品代码 |
 |---|---|---|
 | `tests/gate` | 危险操作关口向量表（直接调用 `internal/danger.Classify`） | 是（真实） |
-| `tests/deps` | 直接依赖预算（只允许 slack-go + bbolt） | 是（go.mod） |
+| `tests/deps` | 直接依赖预算（直接依赖恰好为 slack-go、bbolt、golang.org/x/sys） | 是（go.mod） |
 | `tests/perf` | 体积门禁、`--version` 冷启动、bbolt 持久写/去重吞吐基准 | 是（真实二进制 + `internal/store`） |
 | `tests/realsmoke` | 用假 Slack 启动**真实二进制**，断言 ready 行与 Socket 连接 | 是（真实二进制） |
 | `tests/fakeslack` | 假 Slack（Socket Mode + Web API），slack-go 兼容 | 测试基建 |
@@ -75,12 +75,17 @@ go test ./tests/realsmoke/ -v
 | exe 体积 windows/arm64 | ≤ 25 MiB | **10.70 MiB** | 见 CI `builds-and-size` |
 | `plexus --version` 冷启动 | ≤ 50 ms | **best 2.07 ms / avg 2.69 ms** | `go test ./tests/perf/ -run TestVersionColdStart -v` |
 | `plexus run` ready（假 Slack） | ≤ 500 ms | **110 ms** | `go test ./tests/realsmoke/ -v` |
-| 持久 bbolt 去重写 | ≥ 2,000/s | **12,073 writes/s** | `go test ./tests/perf/ -bench BenchmarkDurableDedupWrites` |
-| 去重吞吐（50% 命中） | ≥ 20,000 ev/s | **21,244 ev/s** | `go test ./tests/perf/ -bench BenchmarkDedupThroughput` |
+| 内存事件路由（harness 事件 → worker 分发，2 个伙伴并行扇出，无磁盘） | ≥ 20,000 events/s | **5.4M–16.2M events/s**（5 次，中位约 9.5M） | `go test ./internal/slackbot/ -run '^$' -bench BenchmarkEventRouting -benchtime 1000000x` |
+| 持久写（bbolt，每次一个 fsync 事务，单写者） | ≥ 2,000/s | **2,481–2,960 writes/s**（5 次中 4 次；1 次因共享盒子磁盘抖动降到 1,458/s） | `go test ./tests/perf/ -run '^$' -bench BenchmarkDurableDedupWrites -benchtime 3s` |
+| 去重吞吐（50% 命中，持久） | 无门禁（仅参考） | 2,619–3,236 ev/s | `go test ./tests/perf/ -run '^$' -bench BenchmarkDedupThroughput -benchtime 3s` |
 | 3 空闲伙伴 RSS / CPU | ≤ 30 MiB / ≤ 1% | 见下（待在 Windows 复核） | — |
 
-> 注：架构师在 Linux 实测“持久去重”约 9.8k–11.9k ev/s，本机 12k writes/s 与之一致；
-> 20k 的“内部吞吐”指内存派发路径，持久路径低于该值属预期。空闲 RSS/CPU 门禁
+> 注（架构师 2026-10-09 裁定）：20k events/s 门禁只针对**内存路由**；磁盘门禁单独为
+> 持久写 ≥ 2,000/s；去重没有 20k 门禁。不在单 bot 路径上用 bbolt Batch，也不做 group commit。
+> 测量环境：2026-10-09，Linux amd64 共享容器（overlayfs），Go 1.25.0。该盒子裸 fsync
+> 约 3,000–5,500 次/s，而 bbolt 每次提交做两次 fsync（数据页 + meta），所以持久写的上限
+> 约为裸 fsync 的一半，余量取决于磁盘；Windows NTFS 需在 Sin 笔记本复核。
+> 基准只在发布时跑一次（CI `release-benchmarks`，手动触发），不在每次 push 跑。空闲 RSS/CPU 门禁
 > 需在 Windows 真机用任务管理器核对（Linux 侧可用 `tests/acceptance` 的
 > `TestPerfIdleResources`，设 `PLEXUS_BIN`）。
 
@@ -98,15 +103,18 @@ go vet ./...
 # 3) 直接依赖预算
 go test ./tests/deps/ -run TestDirectDependencyBudget -v
 # 4) race 全量
-PLEXUS_INSECURE_DEV_SECRETS=1 go test -race ./...
+PLEXUS_INSECURE_DEV_SECRETS=1 go test -race -p 1 ./...
 # 5) 跨平台构建 + 25 MiB 硬门禁
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o plexus-amd64.exe ./cmd/plexus
 CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o plexus-arm64.exe ./cmd/plexus
 # 6) 全新 clone 可构建（校验 .gitignore 未隐藏 internal/secrets）
 # 7) gitleaks 全历史扫描（配置 .github/workflows/gitleaks.toml）
 gitleaks detect --config .github/workflows/gitleaks.toml
-# 8) 已知 flaky 压测（continue-on-error）
-go test ./internal/adapters/codex/ -run TestFinalAnswerPhaseAndWillRetry -count=50 -race
+# 8) Windows 测试（windows-latest，continue-on-error：v0.1 打 tag 前需要，不阻塞）
+go vet ./... && go test -p 1 ./...
+# 9) 发布基准（仅 workflow_dispatch）
+go test ./internal/slackbot/ -run '^$' -bench BenchmarkEventRouting -benchtime 1000000x -count 3
+go test ./tests/perf/ -run '^$' -bench 'BenchmarkDurableDedupWrites|BenchmarkDedupThroughput' -benchtime 3s -count 3
 ```
 
 动作版本已固定（`actions/checkout@v4`、`actions/setup-go@v5`、

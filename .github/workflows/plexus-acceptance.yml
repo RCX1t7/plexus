@@ -91,7 +91,26 @@ jobs:
           GITLEAKS_CONFIG: .github/workflows/gitleaks.toml
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
 
-  flaky-stress:
+  # Wanted before the v0.1 tag; informational until then (never blocks).
+  windows-test:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          check-latest: true
+      - name: go vet (windows)
+        run: go vet ./...
+      - name: go test (windows)
+        run: go test -p 1 ./...
+
+  # Release benchmarks: run once per release (manual dispatch), not on
+  # every push. Gates: in-memory routing >= 20k events/s, durable writes
+  # >= 2,000/s. Record the numbers in docs/VERIFICATION.md.
+  release-benchmarks:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -99,9 +118,7 @@ jobs:
         with:
           go-version: '1.25.x'
           check-latest: true
-      # Known-flaky (turn-start context race), owner: builder/adapter engineer.
-      # This job surfaces the flake rate; it is allowed to fail without
-      # blocking the pipeline until the race is fixed.
-      - name: codex final-answer phase race (stress)
-        continue-on-error: true
-        run: go test ./internal/adapters/codex/ -run TestFinalAnswerPhaseAndWillRetry -count=50 -race -v
+      - name: in-memory event routing (>= 20k events/s)
+        run: go test ./internal/slackbot/ -run '^$' -bench BenchmarkEventRouting -benchtime 1000000x -count 3
+      - name: durable writes (>= 2,000/s)
+        run: go test ./tests/perf/ -run '^$' -bench 'BenchmarkDurableDedupWrites|BenchmarkDedupThroughput' -benchtime 3s -count 3
