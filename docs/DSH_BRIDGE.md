@@ -1,11 +1,14 @@
 # DSH bridge protocol (Go side), protocol version 1
 
 This document is the contract between Plexus (`internal/adapters/dsh`) and the
-DSH-side bridge plugin. The plugin's TypeScript source, tests and build live
-outside this repository (`plexus-team/adapters/dsh-plugin/plugin/`). The built
-file, `internal/adapters/dsh/bridge/plexus-bridge.min.mjs` (one zero-dependency
-ESM file, about 28 KB), is committed here, and `go:embed` bundles it into
-`plexus.exe`, which stays well under the 25 MiB size gate.
+DSH-side bridge plugin. The plugin's TypeScript source, tests and build are in
+`internal/adapters/dsh/bridge/plugin/`. The built file,
+`internal/adapters/dsh/bridge/plexus-bridge.min.mjs` (one zero-dependency ESM
+file, 28,400 bytes), is committed next to it with its sha256 recorded in
+`bridge/plexus-bridge.sha256`. `go:embed` bundles only that file (not the
+source) into `plexus.exe`, which stays well under the 25 MiB size gate. A clean
+`npm ci && node scripts/build.mjs` reproduces it byte for byte (pinned Bun
+1.4.2); see `internal/adapters/dsh/bridge/README.md`.
 
 - **Install location:** the setup page's "Install the plugin" button, and every
   DSH session start, write the whole `plexus` profile to
