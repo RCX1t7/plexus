@@ -205,8 +205,8 @@ func TestHostToolDelegateWritesHandoff(t *testing.T) {
 	if !strings.HasPrefix(card.Text, "<@"+beta+">") || !strings.Contains(card.Text, "If stuck:* <@"+alpha+">") {
 		t.Fatalf("%s", card.Text)
 	}
-	o, ok, _ := tm.st.GetOrigin("C1", card.TS)
-	if !ok || o.Source != string(policy.FromSin) || o.Handoff == "" {
+	o := originOf(t, tm, "C1", card.TS)
+	if o.Source != string(policy.FromSin) || o.Handoff == "" {
 		t.Fatalf("origin %+v", o)
 	}
 	h, ok, _ := tm.st.GetHandoff(o.Handoff)

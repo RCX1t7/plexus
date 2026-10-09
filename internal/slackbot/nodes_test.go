@@ -38,6 +38,21 @@ func host(t *testing.T, tm *team, w *Worker, ts, call, wantReply string) {
 	})
 }
 
+// originOf waits for the origin record of a post. The outbox records it
+// after chat.postMessage returns (store.Finish, then PutOrigin), so a test
+// that sees the post in the fake poster can be ahead of the record; on
+// Windows, where each bolt commit is a slower fsync, it regularly was.
+func originOf(t *testing.T, tm *team, ch, ts string) store.Origin {
+	t.Helper()
+	var o store.Origin
+	eventually(t, "origin of "+ts, func() bool {
+		var ok bool
+		o, ok, _ = tm.st.GetOrigin(ch, ts)
+		return ok
+	})
+	return o
+}
+
 func nodeState(t *testing.T, tm *team, node string) store.Delegation {
 	t.Helper()
 	d, ok, _ := tm.st.GetDelegation(node)
@@ -56,7 +71,7 @@ func TestHandoffAckDeliverReviewLifecycle(t *testing.T) {
 		Text: `<@` + alpha + `> HOST plexus_delegate {"to":"beta","task":"write tests","done_when":"go test passes"}`})
 	eventually(t, "card", func() bool { return tm.fp.count("📋 *Handoff*") == 1 })
 	card := lastPost(tm, "📋 *Handoff*")
-	o, _, _ := tm.st.GetOrigin("C1", card.TS)
+	o := originOf(t, tm, "C1", card.TS)
 	node := o.Handoff
 	if d := nodeState(t, tm, node); d.State != store.NodeHanded || d.FromBot != "alpha" || d.ToBot != "beta" || d.OwnerIfStuck != "<@"+alpha+">" {
 		t.Fatalf("%+v", d)
@@ -86,7 +101,7 @@ func TestHandoffAckDeliverReviewLifecycle(t *testing.T) {
 	// Plexus restarts; the node state survives
 	tm.restart()
 	// alpha wakes on the delivery with the review instruction
-	ro, _, _ := tm.st.GetOrigin("C1", res.TS)
+	ro := originOf(t, tm, "C1", res.TS)
 	if ro.Handoff != node {
 		t.Fatalf("delivery does not carry the node: %+v", ro)
 	}
@@ -115,7 +130,7 @@ func TestHandoffSameReasonEscalatesOnceToOwner(t *testing.T) {
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.0", User: sin,
 		Text: `<@` + alpha + `> HOST plexus_delegate {"to":"beta","task":"t","done_when":"d","owner_if_stuck":"<@` + sin + `>"}`})
 	eventually(t, "card", func() bool { return tm.fp.count("📋 *Handoff*") == 1 })
-	o, _, _ := tm.st.GetOrigin("C1", lastPost(tm, "📋 *Handoff*").TS)
+	o := originOf(t, tm, "C1", lastPost(tm, "📋 *Handoff*").TS)
 	node := o.Handoff
 	host(t, tm, tm.beta, "2.0", `plexus_ack {"node":"`+node+`"}`, "host: acknowledged")
 	for i, ts := range []string{"2.1", "2.3", "2.5"} {
