@@ -8,7 +8,10 @@
 package danger
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"path"
@@ -1000,7 +1003,63 @@ func containsAny(list []string, v ...string) bool {
 	return false
 }
 
-// Fingerprint identifies a call for one-time pre-approval after a restart.
+// Fingerprint identifies a call for one-time pre-approval ("仅此一次"): only
+// the identical call may pass. It covers the kind, name, command (spacing
+// normalized), paths, delete targets, the call's own workdir and the
+// canonical JSON of the raw input without per-call ids, so a send to
+// another recipient or the same rm in another directory is a new call.
+// The result is a SHA-256 hex digest (no message text in the store).
 func Fingerprint(c Call) string {
-	return fmt.Sprintf("%s|%s|%s|%s", c.Kind, c.Name, strings.Join(strings.Fields(c.Command), " "), strings.Join(c.Paths, ";"))
+	h := sha256.New()
+	for _, part := range []string{string(c.Kind), c.Name, strings.Join(strings.Fields(c.Command), " "),
+		strings.Join(c.Paths, "\x00"), strings.Join(c.Deletes, "\x00"), c.Workdir, canonicalInput(c.Input)} {
+		h.Write([]byte(part))
+		h.Write([]byte{0xff})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// volatileKey names per-call identifiers that differ between a parked call
+// and its identical re-issue.
+func volatileKey(k string) bool {
+	switch strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(k)) {
+	case "id", "callid", "tooluseid", "itemid", "turnid", "threadid", "sessionid", "requestid", "approvalid", "timestamp":
+		return true
+	}
+	return false
+}
+
+// canonicalInput renders in as JSON with sorted keys and no volatile ids.
+func canonicalInput(in any) string {
+	if in == nil {
+		return ""
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Sprintf("%#v", in)
+	}
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return string(raw)
+	}
+	var strip func(any) any
+	strip = func(x any) any {
+		switch t := x.(type) {
+		case map[string]any:
+			for k, vv := range t {
+				if volatileKey(k) {
+					delete(t, k)
+					continue
+				}
+				t[k] = strip(vv)
+			}
+		case []any:
+			for i := range t {
+				t[i] = strip(t[i])
+			}
+		}
+		return x
+	}
+	out, _ := json.Marshal(strip(v)) // map keys are sorted by encoding/json
+	return string(out)
 }

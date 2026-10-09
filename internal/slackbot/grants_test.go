@@ -143,3 +143,43 @@ func TestStopAfterRestartCancelsApprovals(t *testing.T) {
 		t.Fatal(a.State)
 	}
 }
+
+// B2: "仅此一次" lets only the identical call through: an MCP send to
+// another recipient, or the same rm in another workdir, parks again.
+func TestApproveOnceOnlyIdenticalCall(t *testing.T) {
+	tm := newTeam(t, false)
+	ask := func(ts, call string) {
+		tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: ts, ThreadTS: "1.0", User: sin, Text: "<@" + alpha + "> TOOLJ " + call})
+	}
+	sendA := `mcp__slack__send_message {"channel":"C_SIN","text":"report"}`
+	sendB := `mcp__slack__send_message {"channel":"C_PUBLIC","text":"report"}`
+	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.0", User: sin, Text: "<@" + alpha + "> TOOLJ " + sendA})
+	eventually(t, "card", func() bool { return len(cardsList(tm)) == 1 })
+	c, _ := card(tm)
+	if !tm.alpha.Approve(tm.ctx, c.Meta.RequestID, sin, DecideOnce) {
+		t.Fatal("approve once")
+	}
+	ask("1.1", sendB) // another recipient: parked, not the approved call
+	eventually(t, "B parked", func() bool { return len(cardsList(tm)) == 2 })
+	if tm.fp.count("allow=true") != 0 {
+		t.Fatal("approve-once let a send to another recipient through")
+	}
+	ask("1.2", sendA) // the identical call: runs once
+	eventually(t, "A runs", func() bool { return tm.fp.count("allow=true") == 1 })
+
+	rmTmp := `bash {"command":"rm -rf build","workdir":"/tmp/p1"}`
+	rmOther := `bash {"command":"rm -rf build","workdir":"/tmp/p2"}`
+	ask("2.0", rmTmp)
+	eventually(t, "rm card", func() bool { return len(cardsList(tm)) == 3 })
+	c = cardsList(tm)[2]
+	if !tm.alpha.Approve(tm.ctx, c.Meta.RequestID, sin, DecideOnce) {
+		t.Fatal("approve once rm")
+	}
+	ask("2.1", rmOther) // same command, another workdir: parked
+	eventually(t, "other workdir parked", func() bool { return len(cardsList(tm)) == 4 })
+	if tm.fp.count("allow=true") != 1 {
+		t.Fatal("approve-once let the rm in another workdir through")
+	}
+	ask("2.2", rmTmp)
+	eventually(t, "identical rm runs", func() bool { return tm.fp.count("allow=true") == 2 })
+}

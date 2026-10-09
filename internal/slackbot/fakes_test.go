@@ -255,6 +255,16 @@ func (s *fakeSess) Send(ctx context.Context, t harness.Turn) (string, error) {
 			s.decisions = append(s.decisions, d)
 			s.mu.Unlock()
 			final = fmt.Sprintf("allow=%v %s", d.Allow, d.Reason)
+		case len(f) > 1 && f[0] == "TOOLJ":
+			// a tool call with raw JSON input (MCP tools, per-call workdir)
+			in := map[string]any{}
+			_ = json.Unmarshal([]byte(strings.Join(f[2:], " ")), &in)
+			got := make(chan harness.Decision, 1)
+			s.emit(harness.Event{Kind: harness.EventPermission, TurnID: id,
+				Perm:   &harness.PermissionRequest{Tool: harness.ToolRequest{CallID: "call-" + id, Name: f[1], Input: in}},
+				Decide: func(d harness.Decision) { got <- d }})
+			d := <-got
+			final = fmt.Sprintf("allow=%v %s", d.Allow, d.Reason)
 		case len(f) > 1 && f[0] == "HOST":
 			args := map[string]any{}
 			_ = json.Unmarshal([]byte(strings.Join(f[2:], " ")), &args)
