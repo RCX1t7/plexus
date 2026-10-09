@@ -1,6 +1,7 @@
 // Package deps_test enforces the dependency budget: the module's DIRECT
-// requires must be only slack-go and bbolt. Indirect deps (x/sys, x/sync,
-// gorilla/websocket) are allowed because slack-go pulls them in.
+// requires must be only slack-go, bbolt and golang.org/x/sys (Windows job
+// objects; review item d). Indirect deps (x/sync, gorilla/websocket) are
+// allowed because slack-go pulls them in.
 package deps_test
 
 import (
@@ -15,6 +16,7 @@ import (
 var allowedDirect = map[string]bool{
 	"github.com/slack-go/slack": true,
 	"go.etcd.io/bbolt":          true,
+	"golang.org/x/sys":          true,
 }
 
 func repoRoot(t *testing.T) string {
@@ -56,7 +58,7 @@ func TestDirectDependencyBudget(t *testing.T) {
 	}
 	for _, d := range direct {
 		if !allowedDirect[d] {
-			t.Errorf("unexpected DIRECT dependency %q; only slack-go and bbolt are allowed as direct requires", d)
+			t.Errorf("unexpected DIRECT dependency %q; only slack-go, bbolt and x/sys are allowed as direct requires", d)
 		}
 	}
 	t.Logf("direct requires: %v", direct)
