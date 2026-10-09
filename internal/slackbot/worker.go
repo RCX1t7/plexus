@@ -277,15 +277,19 @@ func (w *Worker) Handle(ctx context.Context, in Inbound) {
 		}
 		return
 	}
-	if j.autonomous {
-		if !w.hostTools() {
-			return // text-only harness: it answers when addressed
-		}
-		if auth.Source == policy.FromPartner && t.idleEcho(in.Text) {
+	if j.autonomous && !w.hostTools() {
+		return // text-only harness: it answers when addressed
+	}
+	// Loop guard: partner chatter, @-mentioned or not, that repeats recent
+	// chatter with no work in between is not a new turn (two polite models
+	// thanking each other forever). Sin's messages are never filtered and
+	// reset the guard.
+	if auth.Source == policy.FromPartner {
+		if t.idleEcho(in.Text) {
 			w.log().Info("partner chatter repeats without new work; not delivering", "thread", key)
 			return
 		}
-	} else {
+	} else if auth.Source == policy.FromSin {
 		t.mu.Lock()
 		t.work, t.recent = true, nil
 		t.mu.Unlock()

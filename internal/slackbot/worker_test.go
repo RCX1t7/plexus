@@ -2,6 +2,7 @@ package slackbot
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -292,4 +293,30 @@ func TestNoGuestLockRefusesStrangers(t *testing.T) {
 	}
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.1", ThreadTS: "1.0", User: sin, Text: "<@" + alpha + "> hi"})
 	eventually(t, "sin served", func() bool { return tm.fp.count("done: hi") == 1 })
+}
+
+// Review item 9: a partner @-mentioning this partner with the same chatter
+// again and again, with no work in between, starts one turn, not six.
+func TestMentionPingPongGuard(t *testing.T) {
+	tm := newTeam(t, true)
+	for i := 0; i < 6; i++ {
+		ts := fmt.Sprintf("2.%d", i)
+		_ = tm.st.PutOrigin("C1", ts, store.Origin{Bot: "beta", Source: "sin"})
+		in := Inbound{Channel: "C1", TS: ts, User: beta, Text: "<@" + alpha + "> thanks!"}
+		if i > 0 {
+			in.ThreadTS = "2.0"
+		}
+		tm.alpha.Handle(tm.ctx, in)
+		time.Sleep(30 * time.Millisecond)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if n := len(tm.ha.turns()); n != 1 {
+		t.Fatalf("ping-pong started %d turns", n)
+	}
+	// Sin is never filtered, and resets the guard
+	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "2.7", ThreadTS: "2.0", User: sin, Text: "<@" + alpha + "> thanks!"})
+	eventually(t, "sin turn", func() bool { return len(tm.ha.turns()) == 2 })
+	_ = tm.st.PutOrigin("C1", "2.8", store.Origin{Bot: "beta", Source: "sin"})
+	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "2.8", ThreadTS: "2.0", User: beta, Text: "<@" + alpha + "> thanks!"})
+	eventually(t, "partner after sin", func() bool { return len(tm.ha.turns()) == 3 })
 }
