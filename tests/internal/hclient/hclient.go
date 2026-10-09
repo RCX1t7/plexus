@@ -103,6 +103,9 @@ func Start(proto string, o Options, h Handler) (*Session, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	if o.Setpgid {
+		attachTree(cmd)
+	}
 	s := &Session{proto: proto, cmd: cmd, in: in, h: h, pend: map[string]chan json.RawMessage{}, done: make(chan struct{}), turnCh: make(chan turnEnd, 4)}
 	s.id.Store("")
 	s.ccur.Store("")
@@ -423,7 +426,8 @@ func (s *Session) Exited(d time.Duration) bool {
 	}
 }
 
-// Kill kills the harness (its whole process group when Setpgid was used).
+// Kill kills the harness (its whole process group / Job Object when Setpgid
+// was used).
 func (s *Session) Kill() {
 	killTree(s.cmd)
 	_ = s.in.Close()

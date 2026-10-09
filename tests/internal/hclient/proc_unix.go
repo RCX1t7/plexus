@@ -19,3 +19,5 @@ func killTree(c *exec.Cmd) {
 	}
 	_ = c.Process.Kill()
 }
+
+func attachTree(*exec.Cmd) {} // the process group is set before Start
