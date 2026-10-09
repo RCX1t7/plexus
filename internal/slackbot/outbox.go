@@ -31,7 +31,9 @@ type Poster interface {
 	// requestID in its metadata.
 	Find(ctx context.Context, channel, threadTS, requestID string) (ts string, found bool, err error)
 	// Update replaces the text of an earlier post and removes its buttons.
-	Update(ctx context.Context, channel, ts, text string) error
+	// Update replaces a post's text and its blocks; nil blocks removes
+	// them (buttons of a decided card).
+	Update(ctx context.Context, channel, ts, text string, blocks json.RawMessage) error
 }
 
 // Outcome classifies a failed post.
@@ -234,8 +236,8 @@ func (o *Outbox) Flush(ctx context.Context) error {
 }
 
 // Update edits the post with request id id (best effort: the post must
-// have been sent).
-func (o *Outbox) Update(ctx context.Context, id, text string) error {
+// have been sent). blocks replaces the post's blocks; nil removes them.
+func (o *Outbox) Update(ctx context.Context, id, text string, blocks json.RawMessage) error {
 	m, err := o.Store.Get(id)
 	if err != nil {
 		return err
@@ -243,5 +245,8 @@ func (o *Outbox) Update(ctx context.Context, id, text string) error {
 	if m.SlackTS == "" {
 		return fmt.Errorf("post %s was not sent", id)
 	}
-	return o.Poster.Update(ctx, m.Channel, m.SlackTS, redact.String(text, o.Secrets...))
+	if len(blocks) > 0 {
+		blocks = json.RawMessage(redact.String(string(blocks), o.Secrets...))
+	}
+	return o.Poster.Update(ctx, m.Channel, m.SlackTS, redact.String(text, o.Secrets...), blocks)
 }

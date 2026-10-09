@@ -18,6 +18,13 @@ func cardsList(tm *team) []posted {
 	return out
 }
 
+// hasButtons reports whether a card still offers all three actions.
+func hasButtons(p posted) bool {
+	b := string(p.Meta.Blocks)
+	return strings.Contains(b, `"action_id":"`+ActionApprove+`"`) && strings.Contains(b, `"action_id":"`+ActionApproveTask+`"`) &&
+		strings.Contains(b, `"action_id":"`+ActionDeny+`"`)
+}
+
 func TestCardHasThreeButtons(t *testing.T) {
 	tm := newTeam(t, false)
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.0", User: sin, Text: "<@" + alpha + "> TOOL shell git push -f origin main"})
@@ -50,6 +57,9 @@ func TestApproveForTaskGrant(t *testing.T) {
 		t.Fatalf("%d cards for one (rule, target)", n)
 	}
 	c, _ := card(tm)
+	if !c.Updated || !hasButtons(c) {
+		t.Fatalf("merged card lost its buttons: %s", c.Meta.Blocks)
+	}
 	if !tm.alpha.Approve(tm.ctx, c.Meta.RequestID, sin, DecideTask) {
 		t.Fatal("task approval not taken")
 	}

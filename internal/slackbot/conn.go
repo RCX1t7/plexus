@@ -44,9 +44,19 @@ func (p SlackPoster) Post(ctx context.Context, channel, thread, text string, met
 	return "", &PostError{Outcome: Uncertain, Err: err}
 }
 
-// Update replaces a post's text and drops its blocks (buttons).
-func (p SlackPoster) Update(ctx context.Context, channel, ts, text string) error {
-	_, _, _, err := p.API.UpdateMessageContext(ctx, channel, ts, slack.MsgOptionText(text, false), slack.MsgOptionBlocks())
+// Update replaces a post's text and blocks. nil blocks drops them (the
+// buttons of a decided card); a still-pending card passes its buttons
+// again, since chat.update replaces the whole layout.
+func (p SlackPoster) Update(ctx context.Context, channel, ts, text string, blocks json.RawMessage) error {
+	opt := slack.MsgOptionBlocks()
+	if len(blocks) > 0 {
+		var b slack.Blocks
+		if err := json.Unmarshal(blocks, &b); err != nil {
+			return err
+		}
+		opt = slack.MsgOptionBlocks(b.BlockSet...)
+	}
+	_, _, _, err := p.API.UpdateMessageContext(ctx, channel, ts, slack.MsgOptionText(text, false), opt)
 	return err
 }
 

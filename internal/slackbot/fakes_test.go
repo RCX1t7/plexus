@@ -50,13 +50,14 @@ func (p *fakePoster) Post(_ context.Context, ch, th, text string, m Meta) (strin
 	return ts, nil
 }
 
-func (p *fakePoster) Update(_ context.Context, ch, ts, text string) error {
+func (p *fakePoster) Update(_ context.Context, ch, ts, text string, blocks json.RawMessage) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for i := range p.posts {
 		if p.posts[i].TS == ts && p.posts[i].Channel == ch {
 			p.posts[i].Text = text
 			p.posts[i].Updated = true
+			p.posts[i].Meta.Blocks = blocks // chat.update replaces the layout; nil = blocks=[]
 			return nil
 		}
 	}

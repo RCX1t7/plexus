@@ -166,11 +166,17 @@ func (w *Worker) peer(name string) *Worker {
 
 func (w *Worker) refreshCard(p store.Approval) {
 	owner := w.peer(p.CardBot)
-	text, _ := owner.approvalCard(p, w.merged(p.AID))
-	_ = owner.Outbox.Update(context.Background(), p.CardID, text)
+	text, blocks := owner.approvalCard(p, w.merged(p.AID))
+	_ = owner.Outbox.Update(context.Background(), p.CardID, text, blocks) // still pending: keep the buttons
 }
 
 func (w *Worker) approvalCard(a store.Approval, more []store.Approval) (string, json.RawMessage) {
+	return w.approvalCardNote(a, more, "")
+}
+
+// approvalCardNote renders a pending card (text + three-button blocks),
+// with an optional leading note (e.g. after a restart).
+func (w *Worker) approvalCardNote(a store.Approval, more []store.Approval, note string) (string, json.RawMessage) {
 	who := "Sin"
 	if len(w.Owners) > 0 {
 		who = "<@" + w.Owners[0] + ">"
@@ -181,6 +187,9 @@ func (w *Worker) approvalCard(a store.Approval, more []store.Approval) (string, 
 	}
 	text := fmt.Sprintf("%s ⚠️ *%s wants to do something that needs your approval* (`%s`%s) — 已暂挂，等 Sin 批准\n> %s\n```%s```\n",
 		who, w.Bot.Name, a.Rule, target, a.Reason, strings.ReplaceAll(a.Summary, "```", "'''"))
+	if note != "" {
+		text = note + "\n" + text
+	}
 	if len(more) > 0 {
 		var who []string
 		for _, m := range more {
@@ -266,7 +275,7 @@ func (w *Worker) Approve(ctx context.Context, aid, user, mode string) bool {
 		verdict = "✅ Approved by <@" + user + "> (仅此一次 / this one call only)"
 	}
 	owner := w.peer(p.CardBot)
-	_ = owner.Outbox.Update(ctx, p.CardID, fmt.Sprintf("%s — `%s`\n```%s```", verdict, p.Rule, p.Summary))
+	_ = owner.Outbox.Update(ctx, p.CardID, fmt.Sprintf("%s — `%s`\n```%s```", verdict, p.Rule, p.Summary), nil)
 	for _, g := range group {
 		w.peer(g.Bot).tell(ctx, g, user, state == store.ApprovalApproved, mode)
 	}
@@ -287,7 +296,7 @@ func (w *Worker) grantCovered(ctx context.Context, p store.Approval, user string
 		if d, changed, _ := w.Store.DecideApproval(a.AID, store.ApprovalApproved, user); changed {
 			_ = w.Store.SetApprovalMode(a.AID, DecideTask)
 			if a.MergedInto == "" {
-				_ = w.peer(a.CardBot).Outbox.Update(ctx, a.CardID, "✅ Covered by Sin's approval for this task — `"+a.Rule+"` on `"+a.Target+"`")
+				_ = w.peer(a.CardBot).Outbox.Update(ctx, a.CardID, "✅ Covered by Sin's approval for this task — `"+a.Rule+"` on `"+a.Target+"`", nil)
 			}
 			out = append(out, d)
 		}
@@ -355,7 +364,7 @@ func cancelRoot(ctx context.Context, w *Worker, root string) int {
 		if _, changed, _ := w.Store.DecideApproval(a.AID, store.ApprovalCancelled, "stop"); changed {
 			n++
 			if a.MergedInto == "" {
-				_ = w.peer(a.CardBot).Outbox.Update(ctx, a.CardID, CancelledByStop+" — `"+a.Rule+"`\n```"+a.Summary+"```")
+				_ = w.peer(a.CardBot).Outbox.Update(ctx, a.CardID, CancelledByStop+" — `"+a.Rule+"`\n```"+a.Summary+"```", nil)
 			}
 		}
 	}
@@ -376,8 +385,10 @@ func (w *Worker) recoverApprovals(ctx context.Context) {
 		if a.MergedInto != "" || (a.CardBot != "" && a.CardBot != w.Bot.Name) {
 			continue
 		}
-		_ = w.Outbox.Update(ctx, a.CardID, fmt.Sprintf("⏳ *Still waiting for Sin* (Plexus restarted) — 已暂挂，等 Sin 批准 — `%s`\n```%s```\n"+
-			"Click below or reply `approve` / `批准`, `approve for task` / `本任务内批准`, or `deny` / `拒绝` here; approving lets %s run it when it re-issues the call.", a.Rule, a.Summary, w.Bot.Name))
+		// still pending: re-send the three buttons with the note
+		text, blocks := w.approvalCardNote(a, w.merged(a.AID), "⏳ *Still waiting for Sin* (Plexus restarted). Approving lets "+
+			w.Bot.Name+" run it when it re-issues the call.")
+		_ = w.Outbox.Update(ctx, a.CardID, text, blocks)
 	}
 }
 

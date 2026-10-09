@@ -114,8 +114,8 @@ func TestStopCancelsParkedApproval(t *testing.T) {
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "1.1", ThreadTS: "1.0", User: sin, Text: "stop"})
 	eventually(t, "ack", func() bool { return tm.fp.count(StopAck) == 1 })
 	c, _ := card(tm)
-	if !strings.Contains(c.Text, "已随 stop 取消") {
-		t.Fatalf("%+v", c)
+	if !strings.Contains(c.Text, "已随 stop 取消") || len(c.Meta.Blocks) != 0 {
+		t.Fatalf("cancelled card must drop its buttons: %+v", c)
 	}
 	if a, _, _ := tm.st.GetApproval(c.Meta.RequestID); a.State != store.ApprovalCancelled {
 		t.Fatal(a.State)
@@ -144,6 +144,9 @@ func TestParkedApprovalSurvivesRestart(t *testing.T) {
 	c2, _ := card(tm)
 	if cards(tm) != 1 || !strings.Contains(c2.Text, "Still waiting for Sin") || c2.TS != c.TS {
 		t.Fatalf("restart re-posted or did not mark the card: n=%d %+v", cards(tm), c2)
+	}
+	if !c2.Updated || !hasButtons(c2) || !strings.Contains(string(c2.Meta.Blocks), "Still waiting for Sin") {
+		t.Fatalf("recovered card lost its buttons: %s", c2.Meta.Blocks)
 	}
 	if !w2.Approve(tm.ctx, c.Meta.RequestID, sin, DecideOnce) {
 		t.Fatal("approve after restart")
