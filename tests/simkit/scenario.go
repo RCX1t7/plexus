@@ -13,6 +13,7 @@ import (
 
 	"github.com/RCX1t7/plexus/tests/fakeharness"
 	"github.com/RCX1t7/plexus/tests/fakeslack"
+	"github.com/RCX1t7/plexus/tests/internal/exe"
 )
 
 // RunMarkerKey tags every process in a run so leftovers can be found/killed.
@@ -1331,8 +1332,8 @@ func (e *Env) RunSubStop(r *Report) {
 
 // BuildBinaries builds the fake harness and the reference stub hub into dir.
 func BuildBinaries(dir string) (fakeBin, refhubBin string, err error) {
-	fakeBin = filepath.Join(dir, "fakeharness")
-	refhubBin = filepath.Join(dir, "refhub")
+	fakeBin = exe.Name(filepath.Join(dir, "fakeharness"))
+	refhubBin = exe.Name(filepath.Join(dir, "refhub"))
 	for pkg, out := range map[string]string{"github.com/RCX1t7/plexus/tests/cmd/fakeharness": fakeBin, "github.com/RCX1t7/plexus/tests/cmd/refhub": refhubBin} {
 		if b, err := runGo("build", "-o", out, pkg); err != nil {
 			return "", "", fmt.Errorf("build %s: %v\n%s", pkg, err, b)

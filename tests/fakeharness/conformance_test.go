@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/RCX1t7/plexus/tests/fakeharness"
+	"github.com/RCX1t7/plexus/tests/internal/exe"
 	"github.com/RCX1t7/plexus/tests/internal/hclient"
 )
 
@@ -24,7 +25,7 @@ var fakeBin string
 
 func TestMain(m *testing.M) {
 	dir, _ := os.MkdirTemp("", "fh-bin")
-	fakeBin = filepath.Join(dir, "fakeharness")
+	fakeBin = exe.Name(filepath.Join(dir, "fakeharness"))
 	out, err := exec.Command("go", "build", "-o", fakeBin, "github.com/RCX1t7/plexus/tests/cmd/fakeharness").CombinedOutput()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build fakeharness: %v\n%s", err, out)
