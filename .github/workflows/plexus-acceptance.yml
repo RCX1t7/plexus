@@ -95,6 +95,24 @@ jobs:
           GITLEAKS_CONFIG: .github/workflows/gitleaks.toml
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
 
+  # DSH bridge plugin: typecheck, tests, and a reproducible rebuild that
+  # must be byte-identical to the committed artifact and its hash file
+  # (Bun is pinned as an npm devDependency). Owned by the adapter engineer.
+  dsh-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: DSH bridge reproducible rebuild
+        working-directory: internal/adapters/dsh/bridge/plugin
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          node scripts/build.mjs --check
+
   # Wanted before the v0.1 tag; informational until then (never blocks).
   windows-test:
     runs-on: windows-latest
