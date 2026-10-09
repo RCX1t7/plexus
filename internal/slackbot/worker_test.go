@@ -330,3 +330,40 @@ func TestMentionPingPongGuard(t *testing.T) {
 	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "2.8", ThreadTS: "2.0", User: beta, Text: "<@" + alpha + "> thanks!"})
 	eventually(t, "partner after sin", func() bool { return len(tm.ha.turns()) == 3 })
 }
+
+// The ping-pong guard is no-op detection, not a turn cap (architect
+// correction): partner mentions that each carry something new all get a
+// turn, however many there are; only a repeat of recent chatter with no
+// work in between is dropped.
+func TestMentionPingPongGuardIsNotACap(t *testing.T) {
+	tm := newTeam(t, true)
+	const n = 12 // well past any plausible cap (the review probe saw 6/6)
+	for i := 0; i < n; i++ {
+		ts := fmt.Sprintf("2.%02d", i)
+		_ = tm.st.PutOrigin("C1", ts, store.Origin{Bot: "beta", Source: "sin"})
+		in := Inbound{Channel: "C1", TS: ts, User: beta, Text: fmt.Sprintf("<@%s> step %d is ready for you", alpha, i)}
+		if i > 0 {
+			in.ThreadTS = "2.00"
+		}
+		tm.alpha.Handle(tm.ctx, in)
+		want := i + 1
+		eventually(t, fmt.Sprintf("turn %d", want), func() bool { return len(tm.ha.turns()) == want })
+	}
+	// let the last turn end, so the repeat cannot be steered into it
+	eventually(t, "turn end", func() bool {
+		tm.alpha.mu.Lock()
+		th := tm.alpha.threads["C1:2.00"]
+		tm.alpha.mu.Unlock()
+		th.mu.Lock()
+		defer th.mu.Unlock()
+		return th.cur == nil
+	})
+	// the same chatter again, case and spacing aside, with no work since: dropped
+	_ = tm.st.PutOrigin("C1", "2.99", store.Origin{Bot: "beta", Source: "sin"})
+	tm.alpha.Handle(tm.ctx, Inbound{Channel: "C1", TS: "2.99", ThreadTS: "2.00", User: beta,
+		Text: fmt.Sprintf("<@%s>   STEP %d is ready  for you", alpha, n-1)})
+	time.Sleep(150 * time.Millisecond)
+	if got := len(tm.ha.turns()); got != n {
+		t.Fatalf("repeated no-op mention started a turn: %d turns, want %d", got, n)
+	}
+}
