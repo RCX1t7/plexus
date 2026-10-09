@@ -13,7 +13,7 @@
 // into the plexus profile on start. See docs/DSH_BRIDGE.md for the protocol.
 //
 //	client -> dsh  plexus.initialize   {protocol, client}            -> {protocol, capabilities}
-//	client -> dsh  plexus.session.open {cwd, persona, resume, tools} -> {sessionId}
+//	client -> dsh  plexus.session.open {cwd, persona, resume, tools, model?, effort?} -> {sessionId}
 //	client -> dsh  plexus.prompt       {sessionId, text, guest}      -> {turnId}
 //	client -> dsh  plexus.cancel       {sessionId}                   -> {}
 //	client -> dsh  plexus.steer        {sessionId, text}             -> {}
@@ -177,8 +177,16 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 	if tools == nil {
 		tools = []harness.ToolSpec{}
 	}
-	if err := s.rpc.Call(cctx, "plexus.session.open", map[string]any{"cwd": o.Workdir,
-		"persona": o.Persona, "resume": o.ResumeID, "tools": tools}, &res); err != nil {
+	open := map[string]any{"cwd": o.Workdir, "persona": o.Persona, "resume": o.ResumeID, "tools": tools}
+	// Model/Effort are optional: omitted (not "") when empty, so the bridge
+	// resolves DSH's own configured default (agent-default-model).
+	if m := strings.TrimSpace(o.Model); m != "" {
+		open["model"] = m
+	}
+	if e := strings.TrimSpace(o.Effort); e != "" {
+		open["effort"] = e
+	}
+	if err := s.rpc.Call(cctx, "plexus.session.open", open, &res); err != nil {
 		if o.ResumeID != "" && isActiveElsewhere(err) {
 			return fail(fmt.Errorf("%w: %v", harness.ErrActiveElsewhere, err))
 		}

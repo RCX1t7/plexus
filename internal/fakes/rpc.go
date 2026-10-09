@@ -3,6 +3,7 @@ package fakes
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -108,6 +109,12 @@ func lastLine(text string) string {
 }
 
 var steerCh = make(chan string, 1)
+
+// lastOpen is the dsh fake's last plexus.session.open params (OPENED reports them).
+var lastOpen struct {
+	sync.Mutex
+	p map[string]any
+}
 
 func hostArgs(f []string) map[string]any {
 	args := map[string]any{}
@@ -255,6 +262,8 @@ func acp(s *server, method string, p map[string]any) (any, *rpcErr) {
 //	BIGFRAME              emit one oversize (>32 MiB) plexus.event, then final "after-bigframe"
 //	FASTFINAL             emit the final "fast" BEFORE answering plexus.prompt, then
 //	                      answer 300ms later (an early turn end must not lose the final)
+//	OPENED                final "model=<m>;effort=<e>;has_model=<bool>;has_effort=<bool>"
+//	                      from the last plexus.session.open (model/effort passthrough)
 //
 // plexus.prompt takes {sessionId, text, guest}; a "level" member is rejected
 // (-32602): authority is Turn.Guest only. A guest turn (prompt "guest":true)
@@ -280,6 +289,9 @@ func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 		if id == "busy" {
 			return nil, &rpcErr{Code: -32002, Message: "session busy is locked by another process (lease held)"}
 		}
+		lastOpen.Lock()
+		lastOpen.p = p
+		lastOpen.Unlock()
 		return map[string]any{"sessionId": id}, nil
 	case "plexus.cancel":
 		select {
@@ -320,6 +332,13 @@ func dsh(s *server, method string, p map[string]any) (any, *rpcErr) {
 					return
 				}
 				reply = "steered: " + st
+			case len(f) == 1 && f[0] == "OPENED":
+				lastOpen.Lock()
+				op := lastOpen.p
+				lastOpen.Unlock()
+				_, hm := op["model"]
+				_, he := op["effort"]
+				reply = fmt.Sprintf("model=%s;effort=%s;has_model=%v;has_effort=%v", toString(op["model"]), toString(op["effort"]), hm, he)
 			case len(f) >= 2 && f[0] == "HOST":
 				// Only plexus_post is allowed in a guest turn.
 				if guest && f[1] != "plexus_post" {

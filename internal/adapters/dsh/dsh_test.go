@@ -138,6 +138,34 @@ func TestEarlyFinalDoesNotCancelPrompt(t *testing.T) {
 	}
 }
 
+// TestModelEffortPassthrough: SessionOptions.Model/Effort reach
+// plexus.session.open; empty ones are omitted so the bridge resolves DSH's own
+// configured default, and a turn still completes.
+func TestModelEffortPassthrough(t *testing.T) {
+	cases := []struct {
+		name, model, effort, want string
+	}{
+		{"set", "deepseek-reasoner", "high", "model=deepseek-reasoner;effort=high;has_model=true;has_effort=true"},
+		{"model only", "deepseek-chat", "", "model=deepseek-chat;effort=;has_model=true;has_effort=false"},
+		{"empty = DSH default", "", "  ", "model=;effort=;has_model=false;has_effort=false"},
+	}
+	for _, c := range cases {
+		o := fakes.Options(t, "dsh")
+		o.Model, o.Effort = c.model, c.effort
+		s, err := Adapter{}.StartSession(context.Background(), o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fin, _ := (fakes.Driver{}).Turn(t, s, "OPENED", owner); fin.Text != c.want {
+			t.Errorf("%s: %q, want %q", c.name, fin.Text, c.want)
+		}
+		if fin, _ := (fakes.Driver{}).Turn(t, s, "hi", owner); fin.Text != "echo: hi" {
+			t.Errorf("%s: turn did not complete: %q", c.name, fin.Text)
+		}
+		s.Close()
+	}
+}
+
 // TestRefusesWhenGuestLockNotNative is the fail-closed start-up rule (CR-6 /
 // SKELETON-REVIEW item 14): DSH accepts strangers, so the adapter must refuse
 // the whole session unless the bridge reports guest_lock=native. The NOGUARD
