@@ -51,7 +51,7 @@ func (Adapter) Name() string { return "dsh" }
 func (Adapter) Capabilities() harness.Capabilities {
 	n, u := harness.Native, harness.Unsupported
 	return harness.Capabilities{PermissionCallback: n, AskUser: n, BackgroundTasks: n, Subagents: n,
-		SlashCommands: u, Effort: u, Resume: n, Interrupt: n, StopHook: u, SystemPrompt: n, Control: n,
+		SlashCommands: u, Effort: n, Resume: n, Interrupt: n, StopHook: u, SystemPrompt: n, Control: n,
 		PerTaskStop: n, HostTools: n, GuestLock: n} // via the bridge plugin: UNVERIFIED
 }
 
@@ -141,6 +141,10 @@ func (a Adapter) StartSession(ctx context.Context, o harness.SessionOptions) (ha
 		return nil, err
 	}
 	s := &session{p: p, rpc: harness.NewRPC(p, true), em: harness.NewEmitter(), tasks: map[string]bool{}}
+	// An oversize line (> harness.MaxFrame) is discarded by the reader and the
+	// session goes on; surface it as a session-level error event, as the other
+	// adapters do.
+	p.OnDrop(func(n int64) { s.em.Emit(harness.DroppedFrame(n)) })
 	s.rpc.OnNotify = s.notify
 	s.rpc.OnRequest = s.request
 	go func() { s.rpc.Run(); s.exited() }()

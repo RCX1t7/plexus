@@ -222,3 +222,40 @@ func TestResumeOfLeasedSessionIsRefused(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// TestOversizeFrameIsDroppedAndReported: a >32 MiB line from the bridge is
+// discarded, reported once as a session-level "frame_dropped" error event,
+// and the session keeps going (same turn reaches its final; next turn works).
+func TestOversizeFrameIsDroppedAndReported(t *testing.T) {
+	s, err := Adapter{}.StartSession(context.Background(), fakes.Options(t, "dsh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	fin, evs := fakes.Driver{}.Turn(t, s, "BIGFRAME", owner)
+	if fin.Kind != harness.EventFinal || fin.Text != "after-bigframe" {
+		t.Fatalf("turn after the oversize frame: %+v", fin)
+	}
+	drops := 0
+	for _, ev := range evs {
+		if ev.Kind == harness.EventError && ev.Status == "frame_dropped" {
+			drops++
+			if ev.TurnID != "" || !strings.Contains(ev.Text, "dropped one") {
+				t.Errorf("dropped-frame event: %+v", ev)
+			}
+		}
+	}
+	if drops != 1 {
+		t.Fatalf("want 1 frame_dropped event, got %d", drops)
+	}
+	if fin, _ := (fakes.Driver{}).Turn(t, s, "hi", owner); fin.Text != "echo: hi" {
+		t.Fatalf("session did not continue: %q", fin.Text)
+	}
+}
+
+// Effort is passed through plexus.session.open, so it is declared Native.
+func TestCapabilitiesEffortNative(t *testing.T) {
+	if got := (Adapter{}).Capabilities().Effort; got != harness.Native {
+		t.Fatalf("Effort = %v, want Native", got)
+	}
+}
