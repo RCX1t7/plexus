@@ -65,9 +65,20 @@ func TestPersistsAcrossReopen(t *testing.T) {
 	_ = s.Revoke("C1:1.0", "sin")
 	_ = s.SaveSession("claude", "C1:1.0", Session{NativeID: "n1", RootTask: "C1:1.0", Channel: "C1", ThreadTS: "1.0"})
 	_ = s.UpdateSession("claude", "C1:1.0", func(v *Session) { v.Inflight, v.InflightSource = "1.5", "sin" })
-	s.Close()
-	if _, err := Open(p); err != nil { // reopen
+	if err := s.Close(); err != nil {
 		t.Fatal(err)
+	}
+	s2, err := Open(p) // reopen
+	if err != nil {
+		t.Fatal(err)
+	}
+	// close before TempDir cleanup: Windows cannot delete an open file
+	t.Cleanup(func() { s2.Close() })
+	if fresh, _ := s2.MarkSeen("claude", "C1:1.0"); fresh {
+		t.Fatal("seen mark lost across reopen")
+	}
+	if v, ok, _ := s2.LoadSession("claude", "C1:1.0"); !ok || v.NativeID != "n1" || v.Inflight != "1.5" {
+		t.Fatalf("session lost across reopen: %+v ok=%v", v, ok)
 	}
 }
 
