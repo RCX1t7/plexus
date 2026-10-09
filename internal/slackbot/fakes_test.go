@@ -224,7 +224,10 @@ func (s *fakeSess) Send(ctx context.Context, t harness.Turn) (string, error) {
 	s.turnsSent = append(s.turnsSent, t)
 	s.running = id
 	s.mu.Unlock()
-	cmd := t.Text[strings.LastIndex(t.Text, "\n")+1:]
+	// the command is the last line of the frame; a stranger's text arrives
+	// wrapped in <external>, so look inside the block
+	body := strings.TrimSuffix(t.Text, "\n</external>")
+	cmd := body[strings.LastIndex(body, "\n")+1:]
 	go func() {
 		final := "done: " + cmd
 		f := strings.Fields(cmd)

@@ -176,12 +176,42 @@ func Run(ctx context.Context, api *slack.Client, w *Worker, onConnected func()) 
 				// Handle persists the dedup record (and queues the work)
 				// before the ack, so a crash in between means a redelivery,
 				// not a lost message. It returns quickly.
+				var atts []slack.Attachment
+				if m.Message != nil {
+					atts = m.Message.Attachments
+				}
 				w.Handle(ctx, Inbound{Channel: m.Channel, TS: m.TimeStamp, ThreadTS: m.ThreadTimeStamp,
-					User: user, Text: m.Text, DM: m.ChannelType == "im"})
+					User: user, Text: m.Text, DM: m.ChannelType == "im", Quoted: quotedOf(atts)})
 			}
 			if evt.Request != nil {
 				sm.Ack(*evt.Request)
 			}
 		}
 	}
+}
+
+// quotedOf extracts shared / forwarded message bodies from attachments.
+func quotedOf(atts []slack.Attachment) []Quoted {
+	var out []Quoted
+	for _, a := range atts {
+		text := a.Text
+		if text == "" {
+			text = a.Fallback
+		}
+		if a.Pretext != "" {
+			text = strings.TrimSpace(a.Pretext + "\n" + text)
+		}
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		src := "forwarded message"
+		if a.AuthorName != "" {
+			src = "forwarded from " + a.AuthorName
+		}
+		if a.FromURL != "" {
+			src += " (" + a.FromURL + ")"
+		}
+		out = append(out, Quoted{AuthorID: a.AuthorID, Source: src, Text: text})
+	}
+	return out
 }
