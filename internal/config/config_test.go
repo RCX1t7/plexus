@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/RCX1t7/plexus/internal/harness"
@@ -26,7 +27,10 @@ func TestLoadSaveDefaultsAndValidation(t *testing.T) {
 	if err := c.Save(dir); err != nil {
 		t.Fatal(err)
 	}
-	if fi, _ := os.Stat(Path(dir)); fi.Mode().Perm()&0o077 != 0 {
+	// Unix: 0600. Windows has no mode bits (os.Stat reports 0666 for any
+	// writable file); there config.json relies on the per-user profile ACL
+	// of its directory, and it holds no secrets (tokens live in DPAPI).
+	if fi, _ := os.Stat(Path(dir)); runtime.GOOS != "windows" && fi.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("config.json too open: %v", fi.Mode())
 	}
 	c2, err := Load(dir)
