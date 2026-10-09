@@ -31,8 +31,8 @@ func TestParseFillCard(t *testing.T) {
 			t.Fatalf("card lacks %q:\n%s", want, card)
 		}
 	}
-	if !strings.Contains(r.Prompt(), `"done_when":"go test ./uploader passes"`) {
-		t.Fatal(r.Prompt())
+	if !strings.Contains(r.Prompt(""), `"done_when":"go test ./uploader passes"`) {
+		t.Fatal(r.Prompt(""))
 	}
 }
 

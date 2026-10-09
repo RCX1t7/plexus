@@ -21,14 +21,15 @@ const (
 )
 
 type team struct {
-	st     *store.Store
-	fp     *fakePoster
-	peers  *Peers
-	stops  *Stops
-	alpha  *Worker
-	beta   *Worker
-	ha, hb *fakeHarness
-	ctx    context.Context
+	st      *store.Store
+	fp      *fakePoster
+	peers   *Peers
+	stops   *Stops
+	alpha   *Worker
+	beta    *Worker
+	ha, hb  *fakeHarness
+	ctx     context.Context
+	restart func()
 }
 
 func newTeam(t *testing.T, hostTools bool) *team {
@@ -50,6 +51,16 @@ func newTeam(t *testing.T, hostTools bool) *team {
 	tm.alpha, tm.beta = mk("alpha", alpha, tm.ha), mk("beta", beta, tm.hb)
 	tm.stops.Register(tm.alpha)
 	tm.stops.Register(tm.beta)
+	// restart simulates a Plexus restart: fresh workers, harnesses and
+	// in-memory state over the same database.
+	tm.restart = func() {
+		tm.ha, tm.hb = &fakeHarness{hostTools: hostTools}, &fakeHarness{hostTools: hostTools}
+		tm.stops = &Stops{}
+		tm.alpha, tm.beta = mk("alpha", alpha, tm.ha), mk("beta", beta, tm.hb)
+		tm.alpha.Stops, tm.beta.Stops = tm.stops, tm.stops
+		tm.stops.Register(tm.alpha)
+		tm.stops.Register(tm.beta)
+	}
 	return tm
 }
 
@@ -192,7 +203,7 @@ func TestHostToolDelegateWritesHandoff(t *testing.T) {
 			card = p
 		}
 	}
-	if !strings.HasPrefix(card.Text, "<@"+beta+">") || !strings.Contains(card.Text, "If stuck:* <@"+sin+">") {
+	if !strings.HasPrefix(card.Text, "<@"+beta+">") || !strings.Contains(card.Text, "If stuck:* <@"+alpha+">") {
 		t.Fatalf("%s", card.Text)
 	}
 	o, ok, _ := tm.st.GetOrigin("C1", card.TS)

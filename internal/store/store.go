@@ -38,6 +38,7 @@ var (
 	bQuestions = []byte("questions")
 	bApprovals = []byte("approvals")
 	bGrants    = []byte("grants")
+	bDelegs    = []byte("delegations")
 )
 
 // ErrNotFound is returned for missing records.
@@ -57,7 +58,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bOutbox, bSeen, bRevoked, bSessions, bOrigins, bHandoffs, bQuestions, bApprovals, bGrants} {
+		for _, b := range [][]byte{bOutbox, bSeen, bRevoked, bSessions, bOrigins, bHandoffs, bQuestions, bApprovals, bGrants, bDelegs} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -408,6 +409,72 @@ func (s *Store) GetHandoff(taskID string) (Handoff, bool, error) {
 	var ok bool
 	err := s.db.View(func(tx *bolt.Tx) error { h, ok = get[Handoff](tx, bHandoffs, taskID); return nil })
 	return h, ok, err
+}
+
+// Delegation node states: HANDOFF -> ACK -> RESULT -> ACCEPT / REOPEN.
+const (
+	NodeHanded    = "handed"
+	NodeAcked     = "acked"
+	NodeDelivered = "delivered"
+	NodeReopened  = "reopened"
+	NodeAccepted  = "accepted"
+)
+
+// Delegation is the state of one delegated node (keyed by its handoff id).
+// DoneWhen is locked once the assignee acknowledges.
+type Delegation struct {
+	Node, Root, Channel, Thread string
+	FromBot, ToBot              string
+	State                       string
+	DoneWhen                    string
+	OwnerIfStuck                string
+	Round                       int    // delivery round, 1-based
+	LastReason                  string // normalized reason of the last REOPEN
+	Escalated                   bool   // the same-error escalation was sent
+	At, Updated                 int64
+}
+
+// PutDelegation creates a node in state handed (first write wins).
+func (s *Store) PutDelegation(d Delegation) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if _, ok := get[Delegation](tx, bDelegs, d.Node); ok {
+			return nil
+		}
+		d.At, d.Updated = s.ts(), s.ts()
+		if d.State == "" {
+			d.State = NodeHanded
+		}
+		if d.Round == 0 {
+			d.Round = 1
+		}
+		return put(tx, bDelegs, d.Node, d)
+	})
+}
+
+// GetDelegation returns a node.
+func (s *Store) GetDelegation(node string) (Delegation, bool, error) {
+	var d Delegation
+	var ok bool
+	err := s.db.View(func(tx *bolt.Tx) error { d, ok = get[Delegation](tx, bDelegs, node); return nil })
+	return d, ok, err
+}
+
+// UpdateDelegation changes a node atomically; fn returning an error leaves
+// it unchanged. A missing node is ErrNotFound.
+func (s *Store) UpdateDelegation(node string, fn func(*Delegation) error) (Delegation, error) {
+	var d Delegation
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		var ok bool
+		if d, ok = get[Delegation](tx, bDelegs, node); !ok {
+			return ErrNotFound
+		}
+		if err := fn(&d); err != nil {
+			return err
+		}
+		d.Updated = s.ts()
+		return put(tx, bDelegs, node, d)
+	})
+	return d, err
 }
 
 // Question states.

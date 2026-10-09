@@ -166,6 +166,10 @@ ACP：只靠配置接入；`fs` 与 `terminal` 能力为 false；没有宿主工
   - `owner_if_stuck` 默认为委派方。
   - 记录写入 `handoffs`，在线程中以卡片发出并 @ 接手的伙伴。
   - **它用于把事情交代清楚、可追溯，不是鉴权。**
+- **节点状态**（`delegations` 桶，重启不丢）：HANDOFF → `plexus_ack(node, done_when?)` → `plexus_deliver(node, …)` → `plexus_review(node, accept|reopen, reason)`。
+  - ACK 之后 `done_when` 锁定，改写会被拒绝。
+  - 交付帖 @ 委派方，打回帖 @ 接手方；ACCEPT 关闭节点。
+  - 同一节点第二次以相同（归一化后）原因打回时，升级一次给 `owner_if_stuck`。
 - **交付**：`plexus_deliver(summary, artifacts[], evidence[])`。
   - 对每个产物计算 SHA-256；`out/` 下的产物写入 `out/MANIFEST.sha256`。
   - 产物不存在时报错，不发帖。

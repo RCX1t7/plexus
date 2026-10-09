@@ -72,7 +72,9 @@ Plexus 只是一层薄桥，不自己做 agent 循环。各 harness 保留自己
 - **宿主工具**（以原生工具形式提供）：
   - `plexus_post`：在本线程发帖。
   - `plexus_delegate`：带六字段记录交接给其他伙伴。
-  - `plexus_deliver`：交付帖，附产物、SHA-256，并写 `out/MANIFEST.sha256`。
+  - `plexus_ack`：接手方确认节点，此后 `done_when` 锁定。
+  - `plexus_deliver`：交付帖，附产物、SHA-256，并写 `out/MANIFEST.sha256`。带 `node` 时交付该节点并唤醒委派方。
+  - `plexus_review`：委派方验收（accept，关闭节点）或打回（reopen，附原因并唤醒接手方）。同一原因打回两次，升级一次给 `owner_if_stuck`。
   - `plexus_stop_tree`：只在你触发的轮次里可用。
 - **防空转。**
   - 伙伴之间反复说话、中间没有任何工具工作时，暂停投递这些闲聊；有人发话或出现新的工作就恢复。

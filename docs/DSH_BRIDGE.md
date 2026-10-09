@@ -51,7 +51,7 @@ fake (`internal/fakes/rpc.go`, mode `dsh`) are tested.
 - `persona`: appended to DSH's own system prompt. It **must not replace** it.
 - `tools`: Plexus host tools to register as native DSH tools. Each entry is
   `{name, description, inputSchema}`, where `inputSchema` is a JSON Schema object.
-  - Current tools: `plexus_post`, `plexus_delegate`, `plexus_deliver`, `plexus_stop_tree`.
+  - Current tools: `plexus_post`, `plexus_delegate`, `plexus_ack`, `plexus_deliver`, `plexus_review`, `plexus_stop_tree` (the list comes from the Go side).
   - When the model calls one, the bridge sends `plexus.tool` (below) and returns the reply to the model as the tool result.
 - The bridge must not trim DSH's own tools, MCP servers, skills or subagents.
 

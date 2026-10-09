@@ -759,12 +759,7 @@ func (w *Worker) frame(j job) string {
 	}
 	b.WriteString("]\n")
 	if j.handoff != "" {
-		if h, ok, _ := w.Store.GetHandoff(j.handoff); ok {
-			var r handoff.Record
-			if jsonUnmarshal(h.Record, &r) == nil {
-				b.WriteString(r.Prompt() + "\n")
-			}
-		}
+		b.WriteString(w.nodePrompt(j.handoff))
 	}
 	if j.auth.Source == policy.FromStranger {
 		src := "stranger " + j.in.User
@@ -852,7 +847,7 @@ func (w *Worker) renderHandoff(t *thread, j job, text string) string {
 	if m := mention.FindStringSubmatch(rest); m != nil && w.Peers.Has(m[1]) {
 		to = m[1]
 	}
-	rec.Fill(rest, firstOwner(w.Owners))
+	rec.Fill(rest, w.SelfID)
 	id := RequestID(w.Bot.Name, j.in.Channel, j.in.TS, "handoff")
 	w.saveHandoff(t, j, id, to, rec)
 	t.mu.Lock()
@@ -872,6 +867,10 @@ func (w *Worker) saveHandoff(t *thread, j job, id, to string, rec handoff.Record
 	b, _ := jsonMarshal(rec)
 	_ = w.Store.PutHandoff(store.Handoff{TaskID: id, ParentTask: j.auth.Root, Channel: t.channel, Thread: t.ts,
 		FromBot: w.Bot.Name, ToBot: w.Peers.Name(to), Record: b})
+	if to != "" {
+		_ = w.Store.PutDelegation(store.Delegation{Node: id, Root: j.auth.Root, Channel: t.channel, Thread: t.ts,
+			FromBot: w.Bot.Name, ToBot: w.Peers.Name(to), DoneWhen: rec.DoneWhen, OwnerIfStuck: rec.OwnerIfStuck})
+	}
 }
 
 // background handles events outside a running turn: self-started turns of
@@ -914,6 +913,11 @@ func (w *Worker) post(t *thread, j job, id, kind, text string) []string {
 		ho, t.pendingHandoff = t.pendingHandoff, ""
 	}
 	t.mu.Unlock()
+	return w.postCarrying(t, j, id, kind, text, ho)
+}
+
+// postCarrying posts text that carries the handoff record / node ho.
+func (w *Worker) postCarrying(t *thread, j job, id, kind, text, ho string) []string {
 	ids, err := w.Outbox.Enqueue(Post{ID: id, Channel: t.channel, Thread: t.ts, Text: text, Kind: kind,
 		Origin: string(j.auth.Source), HandoffID: ho})
 	if err != nil {

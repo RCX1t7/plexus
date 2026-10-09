@@ -69,7 +69,9 @@ and data directories.
 - **Host tools.** Each partner gets these as native tools:
   - `plexus_post`: post to this thread.
   - `plexus_delegate`: hand off to another partner with a six-field record (below).
-  - `plexus_deliver`: post a delivery with artifacts. It computes their SHA-256 and writes `out/MANIFEST.sha256`.
+  - `plexus_ack`: the assignee acknowledges a delegated node; `done_when` is locked from then on.
+  - `plexus_deliver`: post a delivery with artifacts. It computes their SHA-256 and writes `out/MANIFEST.sha256`. With `node`, it delivers that node and wakes the delegator.
+  - `plexus_review`: the delegator accepts the delivery (closes the node) or reopens it with a reason (wakes the assignee). The same reason twice escalates once to `owner_if_stuck`.
   - `plexus_stop_tree`: only on your turn.
 - **Loop guard.** Plexus stops delivering repeated partner chatter that has no tool work in between. A human message or new work resumes it. There is no turn cap, no budget and no timeout.
 

@@ -55,7 +55,7 @@ func (w *Worker) hostTool(t *thread, j job, ev harness.Event) harness.HostResult
 			return fail("unknown partner %q", a.To)
 		}
 		rec := a.Record
-		rec.Fill("", firstOwner(w.Owners))
+		rec.Fill("", w.SelfID)
 		if m := rec.Missing(); len(m) > 0 {
 			return fail("missing %s", strings.Join(m, ", "))
 		}
@@ -66,8 +66,15 @@ func (w *Worker) hostTool(t *thread, j job, ev harness.Event) harness.HostResult
 		t.mu.Unlock()
 		w.post(t, j, id, "handoff", fmt.Sprintf("<@%s> %s\n%s", to, rec.Task, rec.Card(id, to)))
 		return harness.HostResult{Text: "handed off as " + id}
+	case "plexus_ack":
+		var a nodeArgs
+		if err := toolArgs(ev, &a); err != nil {
+			return fail("bad arguments: %v", err)
+		}
+		return w.ackNode(t, j, callID, a)
 	case "plexus_deliver":
 		var a struct {
+			nodeArgs
 			Summary   string   `json:"summary"`
 			Artifacts []string `json:"artifacts"`
 			Evidence  []string `json:"evidence"`
@@ -79,8 +86,17 @@ func (w *Worker) hostTool(t *thread, j job, ev harness.Event) harness.HostResult
 		if err != nil {
 			return fail("%v", err)
 		}
+		if a.Node != "" {
+			return w.deliverNode(t, j, callID, a.nodeArgs, card)
+		}
 		w.post(t, j, RequestID(w.Bot.Name, t.key, "deliver", j.in.TS, callID), "deliver", card)
 		return harness.HostResult{Text: "delivered"}
+	case "plexus_review":
+		var a nodeArgs
+		if err := toolArgs(ev, &a); err != nil {
+			return fail("bad arguments: %v", err)
+		}
+		return w.reviewNode(t, j, callID, a)
 	case "plexus_stop_tree":
 		if j.auth.Source != policy.FromSin || j.autonomous {
 			return fail("only Sin can stop a task tree")

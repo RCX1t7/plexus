@@ -34,7 +34,9 @@ type Record struct {
 }
 
 // Hint is appended to every bot's persona so harnesses know the format.
-const Hint = "When you hand work to another bot in Slack, mention it and include a block that starts with a line HANDOFF followed by the lines task:, inputs:, done_when:, evidence:, tried_failed:, owner_if_stuck: (write done_when before the work starts)."
+const Hint = "When you hand work to another bot in Slack, mention it and include a block that starts with a line HANDOFF followed by the lines task:, inputs:, done_when:, evidence:, tried_failed:, owner_if_stuck: (write done_when before the work starts). " +
+	"With Plexus tools: plexus_delegate hands off a node; the assignee calls plexus_ack (done_when is locked from then on) and plexus_deliver with the node; " +
+	"the delegator then checks the delivery against done_when and calls plexus_review with accept or reopen and a reason. A delegated node is yours until you accept it."
 
 // Parse extracts a HANDOFF block from text. It returns the record, the text
 // without the block, and whether a block was found.
@@ -100,14 +102,14 @@ func oneLine(s string) string {
 	return s
 }
 
-// Fill sets defaults: the task from the message's first line and the root
-// Owner as owner_if_stuck.
-func (r *Record) Fill(message, rootOwner string) {
+// Fill sets defaults: the task from the message's first line and the
+// delegator (the partner handing the work off) as owner_if_stuck.
+func (r *Record) Fill(message, delegator string) {
 	if r.Task == "" {
 		r.Task = oneLine(message)
 	}
-	if r.OwnerIfStuck == "" && rootOwner != "" {
-		r.OwnerIfStuck = "<@" + rootOwner + ">"
+	if r.OwnerIfStuck == "" && delegator != "" {
+		r.OwnerIfStuck = "<@" + delegator + ">"
 	}
 }
 
@@ -158,8 +160,13 @@ func orMissing(s string) string {
 	return s
 }
 
-// Prompt renders the record for the receiving harness.
-func (r Record) Prompt() string {
+// Prompt renders the record for the receiving harness. node is the
+// delegated node id ("" for a text-only handoff).
+func (r Record) Prompt(node string) string {
 	b, _ := json.Marshal(r)
-	return "[Handoff record for this task: " + string(b) + ". If done_when is empty, write it in your first reply before doing the work.]"
+	s := "[Handoff record for this task: " + string(b) + ". If done_when is empty, write it in your first reply before doing the work."
+	if node != "" {
+		s += " Node `" + node + "`: call plexus_ack with this node before you start (done_when is locked from then on), and plexus_deliver with this node when done_when is met."
+	}
+	return s + "]"
 }
