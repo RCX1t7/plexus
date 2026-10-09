@@ -20,7 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RCX1t7/plexus/internal/secrets"
 	"github.com/RCX1t7/plexus/tests/fakeslack"
+	"github.com/RCX1t7/plexus/tests/internal/exe"
 )
 
 func repoRoot(tb testing.TB) string {
@@ -33,7 +35,7 @@ func buildPlexus(tb testing.TB) string {
 	if p := os.Getenv("PLEXUS_BIN"); p != "" {
 		return p
 	}
-	out := filepath.Join(tb.TempDir(), "plexus")
+	out := exe.Name(filepath.Join(tb.TempDir(), "plexus"))
 	cmd := exec.Command("go", "build", "-o", out, "./cmd/plexus")
 	cmd.Dir = repoRoot(tb)
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
@@ -56,8 +58,13 @@ func TestRealBinaryBootsOnFakeSlack(t *testing.T) {
 	defer sl.Close()
 
 	home := t.TempDir()
-	// secrets.dev.json: flat map of bot/<name>/{bot_token,app_token}
-	secrets := map[string]string{}
+	// Tokens go in through the product's own secret store (DPAPI on Windows,
+	// the 0600 secrets.dev.json elsewhere), keyed bot/<name>/{bot_token,app_token}.
+	t.Setenv("PLEXUS_INSECURE_DEV_SECRETS", "1")
+	sec, err := secrets.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
 	type cbot struct {
 		Name    string `json:"name"`
 		Harness string `json:"harness"`
@@ -68,14 +75,14 @@ func TestRealBinaryBootsOnFakeSlack(t *testing.T) {
 	}
 	var cbots []cbot
 	for _, b := range opts.Bots {
-		secrets["bot/"+b.Name+"/bot_token"] = b.Token
-		secrets["bot/"+b.Name+"/app_token"] = b.AppToken
+		if err := sec.Set("bot/"+b.Name+"/bot_token", b.Token); err != nil {
+			t.Fatal(err)
+		}
+		if err := sec.Set("bot/"+b.Name+"/app_token", b.AppToken); err != nil {
+			t.Fatal(err)
+		}
 		cbots = append(cbots, cbot{Name: b.Name, Harness: harnessOf[b.Name], Enabled: true,
 			Workdir: filepath.Join(home, "work", b.Name), Exe: "/bin/true", AppID: b.AppID})
-	}
-	sb, _ := json.Marshal(secrets)
-	if err := os.WriteFile(filepath.Join(home, "secrets.dev.json"), sb, 0o600); err != nil {
-		t.Fatal(err)
 	}
 	cfg := map[string]any{
 		"owners":        []string{opts.OwnerID},
@@ -98,8 +105,11 @@ func TestRealBinaryBootsOnFakeSlack(t *testing.T) {
 	}
 	defer func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() }()
 
-	readyc := make(chan int, 2)
-	scan := func(r io.Reader) {
+	// The ready line is on STDERR (REQUIREMENTS / architect #16); the same
+	// line on stdout is a failure, not an alternative.
+	readyc := make(chan int, 1)
+	onStdout := make(chan string, 1)
+	scan := func(r io.Reader, found func(n int, line string)) {
 		sc := bufio.NewScanner(r)
 		for sc.Scan() {
 			if m := readyRE.FindStringSubmatch(sc.Text()); m != nil {
@@ -107,15 +117,26 @@ func TestRealBinaryBootsOnFakeSlack(t *testing.T) {
 				for _, c := range m[1] {
 					n = n*10 + int(c-'0')
 				}
-				readyc <- n
-				return
+				found(n, sc.Text())
 			}
 		}
 	}
-	go scan(stdout)
-	go scan(stderr)
+	go scan(stdout, func(_ int, line string) {
+		select {
+		case onStdout <- line:
+		default:
+		}
+	})
+	go scan(stderr, func(n int, _ string) {
+		select {
+		case readyc <- n:
+		default:
+		}
+	})
 
 	select {
+	case line := <-onStdout:
+		t.Fatalf("ready line printed on stdout, want stderr: %q", line)
 	case n := <-readyc:
 		dur := time.Since(start)
 		t.Logf("plexus ready bots=%d in %v (startup gate <= 500ms on fake Slack)", n, dur.Round(time.Millisecond))
