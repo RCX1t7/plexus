@@ -1,0 +1,21 @@
+{
+  "name": "plexus-dsh-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Plexus bridge plugin for DeepSeek Harness: newline-delimited JSON-RPC over stdio",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test test/"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "bun": "1.4.2",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

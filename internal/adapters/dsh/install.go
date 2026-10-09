@@ -16,11 +16,12 @@ import (
 	"github.com/RCX1t7/plexus/internal/harness"
 )
 
-// The bridge plugin slot: bridge/plexus-bridge.min.mjs, bundled by go:embed
-// (see bridge/README.md). Until the plugin is dropped in, only the README is
-// there and Bundled reports false.
+// The bridge plugin: bridge/plexus-bridge.min.mjs, built from the TypeScript
+// source in bridge/plugin (see bridge/README.md). Only the artifact is
+// embedded, never the source, tests or node_modules; its sha256 is recorded
+// in bridge/plexus-bridge.sha256 and checked by bridge_test.go.
 //
-//go:embed all:bridge
+//go:embed bridge/plexus-bridge.min.mjs
 var bridgeFS embed.FS
 
 // ProfileName is the DSH profile Plexus runs (never DSH Desktop's "desktop").
@@ -28,7 +29,7 @@ const ProfileName = "plexus"
 
 // BridgeVersion stamps the profile package.json and the overlay. It is kept
 // in sync with the TypeScript build (protocol.ts BRIDGE_VERSION, injected by
-// plugin/scripts/build.mjs). A non-empty version is required: DSH's
+// bridge/plugin/scripts/build.mjs). A non-empty version is required: DSH's
 // plugin-package-inventory throws on a profile package.json without one
 // (REQUEST_EXTENSION on every model request otherwise).
 const BridgeVersion = "1.0.0"

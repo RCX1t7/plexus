@@ -1,0 +1,3 @@
+# Byte-exact on every OS: the artifact is hash-pinned and the manifest pins the
+# sources' bytes, so no checkout may rewrite line endings here.
+* -text
